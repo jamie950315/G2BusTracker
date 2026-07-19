@@ -1,0 +1,21 @@
+{
+  "package_id": "dev.oruka.taiwanbus",
+  "name": "台灣公車追蹤",
+  "version": "0.10.9",
+  "edition": "202601",
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.12",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "location",
+      "desc": "取得手機位置以依距離排列附近公車站位。"
+    },
+    {
+      "name": "network",
+      "desc": "透過台灣公車即時資料代理下載大台北站牌、路線、到站與車輛位置資料。",
+      "whitelist": ["https://taiwan-bus.0ruka.dev"]
+    }
+  ],
+  "supported_languages": ["zh", "en"]
+}

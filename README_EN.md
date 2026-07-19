@@ -1,0 +1,158 @@
+# Taiwan Bus Tracker — Even Realities G2
+
+English | [繁體中文](README.md)
+
+A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
+
+Current version: `0.10.9`
+
+## Features
+
+- Starts from Taipei Main Station and automatically switches to the phone's GPS location when available.
+- Lists the 20 nearest stops by straight-line distance with their serving routes.
+- Merges same-named boarding points within 80 meters while preserving every physical StopID and direction for arrival lookup.
+- Refreshes live arrivals every five seconds without resetting phone scroll, G2 selection, or pagination.
+- Shows the full stop sequence, both directions, stop-level ETAs, the selected stop, and live vehicle plates.
+- Normalizes Route IDs and `pathAttributeId`, then maps vehicles within 500 meters to the nearest stop on the same route and direction.
+- Lets phone users search routes, star favorite stops, and create, rename, or delete custom groups.
+- Keeps G2 read-only for fast viewing; favorite and group management stays on the phone.
+- Displays the source update time in `HH:MM:SS` at the top-right of G2 detail pages.
+- Renders phone navigation and starts data requests without waiting for G2 Bridge transfers, while keeping all glasses Bridge calls serialized.
+- Uses no fake ETAs, vehicles, or plates. Failures are shown explicitly or served from the last successful proxy response.
+
+## Controls
+
+| Page | G2 swipe up | G2 swipe down | G2 click | G2 double-click | Phone |
+|---|---|---|---|---|---|
+| Home | Previous option | Next option | Open option | Exit the G2 page | Tap a feature |
+| Favorites | Cycle groups | Cycle routes | Open route details | Return home | Tap tabs, search, star, and manage groups |
+| Nearby stops | Previous stop | Next stop | Open stop details | Return home | Tap a stop |
+| Stop details | Previous route | Next route | Open route details | Return to nearby stops | Back button or tap a route |
+| Route details | Previous stop | Next stop | Toggle direction | Return to the previous page | Tap a direction tab; use the back button |
+
+## Live data and privacy
+
+The app connects to `https://taiwan-bus.0ruka.dev`, a real-time data proxy deployed on a Raspberry Pi 5. The proxy reads the public gzip feeds published by the Taipei City Public Transportation Office:
+
+- `GetStop.gz`: stops and route stop sequences.
+- `GetRoute.gz`: route names, origins, and destinations.
+- `GetEstimateTime.gz`: real-time arrival estimates.
+- `GetBusData.gz`: live vehicle coordinates, directions, and plates.
+
+The proxy prewarms all four feeds, deduplicates upstream requests, and serves the last successful response immediately while revalidating expired data in the background. Responses expose cache state, age, and source timestamps. The UI displays the feed's `UpdateTime`, not the phone's receipt time.
+
+Phone location is used locally only to calculate distance and sort nearby stops. Coordinates are not appended to the bus data requests above. The repository contains no TDX Client Secret or other API key.
+
+## Requirements
+
+- Node.js `^20.19.0` or `>=22.12.0`
+- npm
+- Even Realities App / Even Hub Host `2.0.0` or later
+- Even Hub SDK `0.0.12`
+- Official Even Hub Simulator `0.8.0` (optional)
+
+## Quick start
+
+```bash
+npm install
+npm run dev
+```
+
+The development server listens on all network interfaces. For G2 device testing, place the phone and computer on the same local network, then run this in another terminal:
+
+```bash
+npx evenhub qr --url "http://YOUR_LAN_IP:5173"
+```
+
+Enable Developer Mode in the Even Realities App, scan the QR code, and grant location permission on first launch.
+
+## Official Simulator
+
+Terminal 1:
+
+```bash
+npm run dev
+```
+
+Terminal 2:
+
+```bash
+npm run simulate
+```
+
+For the automation API:
+
+```bash
+npm run simulate:automation
+```
+
+Native dependencies on Ubuntu / Debian:
+
+```bash
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libsoup-3.0-0
+```
+
+Simulator `0.8.0` does not implement the GPS Bridge methods used by this app, so it falls back to the default Taipei coordinates. Real location permission and tracking must be verified with the Even Realities App and a G2 device.
+
+## Build and package an EHPK
+
+```bash
+npm run build
+npm run pack
+```
+
+Output: `taiwan-bus-g2-v0.10.9.ehpk`
+
+You can inspect the final `dist` build first:
+
+```bash
+npm run preview
+```
+
+## Real-time data proxy
+
+The proxy is implemented in `server/server.mjs` and listens on `127.0.0.1:8893` by default:
+
+```bash
+node server/server.mjs
+```
+
+For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose it through an HTTPS Cloudflare Tunnel. Do not publish the unprotected proxy port directly to the internet.
+
+## Project structure
+
+```text
+.
+├── app.json                         # Even Hub manifest and permissions
+├── index.html                       # Phone WebView HTML and CSS
+├── src/main.ts                      # State, data, GPS, phone UI, and G2 UI
+├── server/server.mjs                # Live-data caching proxy
+├── server/taiwan-bus-g2-proxy.service
+├── SIMULATOR_VALIDATION.md          # Actual Simulator runs and regression evidence
+├── README.md                        # Traditional Chinese documentation
+└── README_EN.md                     # English documentation
+```
+
+## Reliability design
+
+- Serializes every G2 Bridge call through one Promise queue.
+- Shares identical in-flight data requests.
+- Runs network fetches and G2 page creation concurrently, but waits for target containers before updating G2.
+- Rechecks page generation, image generation, and direction after waits and retries so stale work cannot overwrite a newer page.
+- Remembers the image format accepted by the current Host session, with a bounded alternate-format fallback and a three-text-container compatibility page.
+- Uses text upgrades instead of page rebuilds for five-second refreshes, preserving selection and scroll position.
+
+## Validation status
+
+Version `0.10.9` was operated in the official Simulator `0.8.0` against the production real-time API. The exercised flows included home, favorites, nearby stops, stop details, route details, direction switching, every G2 gesture, rapid-return races, and plate rendering:
+
+- Final full regression: 192 events, `0` application errors, `0` fallbacks.
+- Final production `dist` smoke test: 80 events, `0` application errors, `0` fallbacks.
+- See [SIMULATOR_VALIDATION.md](SIMULATOR_VALIDATION.md) for the environment, exact steps, and captured evidence.
+
+The Simulator cannot fully replace BLE, Host, and G2 firmware testing. Direction images therefore retain format probing, bounded retries, cross-page invalidation, and a text compatibility layout.
+
+## License
+
+No open-source license has been selected yet. Add an appropriate `LICENSE` before publishing the repository if you intend to permit reuse or external contributions.
