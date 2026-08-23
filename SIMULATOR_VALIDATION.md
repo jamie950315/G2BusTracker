@@ -1,6 +1,53 @@
 # Even Hub Simulator 眼鏡手勢驗證
 
-- App：台灣公車追蹤 `0.10.9`
+- App：台灣公車追蹤 `0.10.11`
+
+## `0.10.11` 150 公尺條件式雙向站牌合併
+
+本版保留同名站牌的 80 公尺實體分群，僅將第二階段互補方向合併擴至 150 公尺。合併仍要求共享同一路線的相反方向、每個地點最多合併一次，且合併後所有實體位置彼此都不得超過 150 公尺。
+
+2026-08-11（Asia/Taipei）以官方 Simulator `0.8.0`、SDK `0.0.12` 與正式 `https://taiwan-bus.0ruka.dev/blobbus` 資料驗證。隔離使用 Vite `5175` 與 automation `9900`，測試副本的預設位置設為 `25.11325, 121.53210`，正式專案預設位置未修改。
+
+| 頁面／情境 | 實際操作 | 結果 |
+|---|---|---|
+| 首頁 → 附近站牌 | Down、Click | 正常進入附近清單 |
+| 天母棒球場站牌 | 檢查附近清單 | `天母棒球場(忠誠)` 只顯示一筆（`21m`）；`天母棒球場(士東)` 只顯示一筆（`70m`） |
+| 忠誠站牌詳情 | Click 第一筆 | 正常載入正式 ETA；同一 Route ID 僅顯示一次 |
+| 150 公尺邊界 | 自動測試 `108m`、`150m`、`151m`、多位置群組與四群候選 | `108m` 與恰好 `150m` 的互補方向合併；`151m` 不合併；最近位置雖在 `150m`、但合併後跨度達 `310m` 的群組不合併；多候選時選出最多合法配對，再以總距離最短者決勝 |
+
+- 啟動資料：`5595 physical -> 3083 logical`；站牌分群 `473ms`、距離排序 `1ms`。
+- 自動測試：`31/31` 通過；production build 與 EHPK 打包通過。
+- 最終 console：`26` 筆事件，App error `0`；僅有 Simulator 未實作 GPS bridge 的預期 warning。檔案：`simulator-validation/console-v01011-tianmu.json`。
+- 畫面證據：`simulator-validation/simulator-webview-v01011-tianmu-nearby.png`、`simulator-validation/simulator-webview-v01011-tianmu-detail.png`。
+
+## `0.10.10` 附近站牌雙向合併、路線去重與跨頁防護
+
+本版修正同一站牌因道路兩側方向資料而在附近清單與站牌詳情重複出現的問題，並整合 code review 找出的 G2 非同步頁面競態、收藏版本衝突與即時資料過期風險：
+
+- 同名群組若有實體位置相距 80 公尺內，且共享同一路線相反方向，就只做一次合併，不再透過第三個群組連鎖擴張；這是大型轉運站的方向配對規則，不宣稱合併後所有其他路線位置彼此都在 80 公尺內。
+- 站牌詳情以 Route ID 顯示單一資料列；首次使用最早到站方向，之後五秒刷新保留該方向與路線順序，進入路線頁仍可手動切換。
+- G2 點擊只讀最後完整呈現成功的站牌／路線快照；所有頁面 rebuild 與文字更新均受頁面世代保護，舊工作不可覆蓋新頁。
+- Dynamic proxy cache 最多可沿用 30 秒；車輛請求失敗會清除舊車牌。Bridge 與手機收藏以 revision 選擇最新版。
+- Route metadata 暫時失敗時仍以 Route ID 保留 ETA；非法方向與非法 ETA 不會產生錯誤導航。
+
+2026-08-11（Asia/Taipei）以官方 Simulator `0.8.0`、SDK `0.0.12` 與正式 `https://taiwan-bus.0ruka.dev/blobbus` 即時資料完成最終操作。因另一個使用中的 G2 App 佔用預設連接埠，本次隔離使用 Vite `5174` 與 automation `9899`，未中斷既有程序。
+
+| 頁面／情境 | 實際操作 | 結果 |
+|---|---|---|
+| 首頁 → 附近站牌 | Down、Click | 正常進入附近清單 |
+| 附近站牌合併 | 檢查預設臺北位置前兩筆 | 原本距離 `0m`、`27m` 且共同含 `39／39夜` 的兩張「臺北車站(忠孝)」已合為一張；較遠的 `196m` 實體站仍保持分開 |
+| 站牌詳情去重 | Click 進入合併後站牌 | `39`、`652` 等 Route ID 各只出現一次，沒有方向重複列 |
+| 五秒刷新 | 等待超過一輪 ETA 更新 | 前六筆路線身份與順序保持不變，資料時間與 ETA 正常更新 |
+| 路線／方向 | Click 進 `忠孝幹線`，再 Click 切換方向 | 路線頁建立、方向切換與站序更新正常 |
+| 快速返回 | 進入 `652` 後立即 Double click | 等待舊工作完成後仍停在站牌詳情，沒有舊 route rebuild 覆蓋 |
+
+- 啟動資料：`5367 physical -> 3351 logical`；站牌聚類 `379ms`、距離排序 `1ms`，同名分桶避免全站牌平方掃描。
+- 最終 console：`137` 筆事件，App error `0`、fallback `0`。檔案：`simulator-validation/console-v01010-nearby-dedup.json`。
+- 附近清單證據：`simulator-validation/simulator-webview-v01010-nearby.png`、`simulator-validation/simulator-glasses-v01010-nearby.png`。
+- 去重與刷新證據：`simulator-validation/simulator-webview-v01010-detail.png`、`simulator-validation/simulator-webview-v01010-detail-refresh.png`、`simulator-validation/simulator-glasses-v01010-detail-refresh.png`。
+- 路線與方向證據：`simulator-validation/simulator-webview-v01010-route.png`、`simulator-validation/simulator-webview-v01010-route-direction.png`、`simulator-validation/simulator-glasses-v01010-route-direction.png`。
+- 快速返回證據：`simulator-validation/simulator-webview-v01010-rapid-return.png`、`simulator-validation/simulator-glasses-v01010-rapid-return.png`。
+- 預期 warning 僅有 Simulator 未實作 GPS bridge，以及 Simulator 拒絕實機 `raw4` 方向圖後改用 PNG；沒有功能 fallback。GPS 與實機 BLE／韌體仍須在目標 G2 Host 確認。
 
 ## `0.10.9` 手機／G2 並行渲染與即時資料快取
 

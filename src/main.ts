@@ -16,6 +16,14 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { ungzip } from 'pako'
 import notoSansTcUrl from '@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-traditional-600-normal.woff2?url'
+import { buildStationArrivals } from './arrivals.ts'
+import { PresentedList } from './presented-list.ts'
+import {
+  COMPLEMENTARY_STATION_CLUSTER_RADIUS_METERS,
+  canJoinStationCluster,
+  mergeComplementaryStationClusters,
+} from './station-clustering.ts'
+import { chooseNewestStoredValue, encodeStoredValue } from './versioned-storage.ts'
 
 const DATA_ORIGIN = 'https://taiwan-bus.0ruka.dev/blobbus'
 const STOP_DATA_URL = `${DATA_ORIGIN}/GetStop.gz`
@@ -188,6 +196,10 @@ type PageMode = 'loading' | 'home' | 'favorites' | 'list' | 'detail' | 'route' |
 type PhoneFavoriteView = 'list' | 'search' | 'groups'
 type RouteReturnMode = 'detail' | 'favorites'
 type DirectionImageFormat = 'raw4' | 'png'
+interface PageToken {
+  mode: PageMode
+  epoch: number
+}
 
 const bridge = await waitForEvenAppBridge()
 let bridgeCallQueue: Promise<void> = Promise.resolve()
@@ -198,12 +210,28 @@ function serializeBridgeCall<T>(operation: () => Promise<T>): Promise<T> {
   return result
 }
 
-function rebuildGlassesPage(container: RebuildPageContainer): Promise<boolean> {
-  return serializeBridgeCall(() => bridge.rebuildPageContainer(container))
+function currentPageToken(): PageToken {
+  return { mode: pageMode, epoch: etaRefreshEpoch }
 }
 
-function upgradeGlassesText(container: TextContainerUpgrade): Promise<boolean> {
-  return serializeBridgeCall(() => bridge.textContainerUpgrade(container))
+function isPageTokenCurrent(token: PageToken): boolean {
+  return pageMode === token.mode && etaRefreshEpoch === token.epoch
+}
+
+function rebuildGlassesPage(
+  container: RebuildPageContainer,
+  token = currentPageToken(),
+): Promise<boolean> {
+  return serializeBridgeCall(() =>
+    isPageTokenCurrent(token) ? bridge.rebuildPageContainer(container) : Promise.resolve(false))
+}
+
+function upgradeGlassesText(
+  container: TextContainerUpgrade,
+  token = currentPageToken(),
+): Promise<boolean> {
+  return serializeBridgeCall(() =>
+    isPageTokenCurrent(token) ? bridge.textContainerUpgrade(container) : Promise.resolve(false))
 }
 
 function updateGlassesImage(data: ImageRawDataUpdate): Promise<ImageRawDataUpdateResult> {
@@ -218,6 +246,8 @@ let pageMode: PageMode = 'loading'
 let stations: BusStation[] = []
 let stationById = new Map<string, BusStation>()
 let visibleStations: BusStation[] = []
+const presentedStations = new PresentedList<BusStation>()
+let stationDistancesDirty = true
 let routeInfo = new Map<number, RouteInfo>()
 let routeStopsByDirection = new Map<string, RouteStop[]>()
 let routeIdByPathAttributeId = new Map<number, number>()
@@ -229,6 +259,7 @@ let currentLocation: LocatedCoordinates = DEFAULT_LOCATION
 let locationSource: '預設台北' | 'GPS' = '預設台北'
 let selectedStation: BusStation | null = null
 let currentArrivals: Arrival[] = []
+const presentedArrivals = new PresentedList<Arrival>()
 let isLoading = false
 let isRefreshingEta = false
 let etaRefreshTimer: number | null = null
@@ -238,10 +269,12 @@ let selectedArrivalIndex = 0
 let selectedRoute: Arrival | null = null
 let selectedDirection = 0
 let routePageStart = 0
+let stationListRenderEpoch = 0
 let routeReturnMode: RouteReturnMode = 'detail'
 let favoriteGroups: FavoriteGroup[] = [{ id: 'default', name: '常用' }]
 let favoriteItems: FavoriteItem[] = []
 let activeFavoriteGroupId = 'default'
+let favoriteSettingsRevision = 0
 let favoriteSelectedIndex = 0
 let favoritePageStart = 0
 let phoneFavoriteView: PhoneFavoriteView = 'list'
@@ -306,7 +339,7 @@ renderPhoneLoading()
 bridge.onEvenHubEvent((event) => {
   const listEvent = event.listEvent
 
-  if (listEvent?.containerID === HOME_LIST_CONTAINER_ID) {
+  if (listEvent?.containerID === HOME_LIST_CONTAINER_ID && pageMode === 'home') {
     if (listEvent.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
       void shutDownGlassesPage(1)
       return
@@ -322,7 +355,7 @@ bridge.onEvenHubEvent((event) => {
     return
   }
 
-  if (listEvent?.containerID === LIST_CONTAINER_ID) {
+  if (listEvent?.containerID === LIST_CONTAINER_ID && pageMode === 'list') {
     if (listEvent.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
       void showHome()
       return
@@ -333,7 +366,7 @@ bridge.onEvenHubEvent((event) => {
       listEvent.eventType === undefined
     ) {
       const index = listEvent.currentSelectItemIndex ?? 0
-      const station = visibleStations[index]
+      const station = presentedStations.at(index)
       if (station) void showStationDetail(station)
     }
     return
@@ -359,8 +392,9 @@ bridge.onEvenHubEvent((event) => {
       sysEvent.eventType === OsEventTypeList.CLICK_EVENT ||
       sysEvent.eventType === undefined
     ) {
-      if (pageMode === 'detail' && currentArrivals[selectedArrivalIndex]) {
-        void showRouteDetail(currentArrivals[selectedArrivalIndex])
+      const presentedArrival = presentedArrivals.at(selectedArrivalIndex)
+      if (pageMode === 'detail' && presentedArrival) {
+        void showRouteDetail(presentedArrival)
       } else if (pageMode === 'route') {
         toggleRouteDirection()
       } else if (pageMode === 'favorites') {
@@ -404,7 +438,7 @@ bridge.onEvenHubEvent((event) => {
       case OsEventTypeList.SCROLL_BOTTOM_EVENT:
         selectedArrivalIndex = Math.min(
           selectedArrivalIndex + 1,
-          Math.max(0, currentArrivals.length - 1),
+          Math.max(0, presentedArrivals.length - 1),
         )
         keepSelectedArrivalVisible()
         void updateGlassesArrivalText()
@@ -416,8 +450,9 @@ bridge.onEvenHubEvent((event) => {
         break
       case OsEventTypeList.CLICK_EVENT:
       case undefined:
-        if (currentArrivals[selectedArrivalIndex]) {
-          void showRouteDetail(currentArrivals[selectedArrivalIndex])
+        const arrival = presentedArrivals.at(selectedArrivalIndex)
+        if (arrival) {
+          void showRouteDetail(arrival)
         }
         break
     }
@@ -504,9 +539,25 @@ function stationKeyForStop(
   longitude: number,
 ): string {
   const fallbackKey = `${stop.nameZh}:${latitude.toFixed(5)}:${longitude.toFixed(5)}`
-  return stop.stopLocationId
-    ? `station:${stop.stopLocationId}`
+  const stopLocationId = Number(stop.stopLocationId)
+  return stop.stopLocationId !== undefined &&
+    stop.stopLocationId !== null &&
+    Number.isFinite(stopLocationId)
+    ? `station:${stopLocationId}`
     : `stop:${fallbackKey}`
+}
+
+function stationSourceKeyForStop(
+  stop: RawStop,
+  latitude: number,
+  longitude: number,
+): string {
+  return [
+    stationKeyForStop(stop, latitude, longitude),
+    normalizedStationName(stop.nameZh),
+    latitude.toFixed(5),
+    longitude.toFixed(5),
+  ].join(':')
 }
 
 function normalizedStationName(value: string): string {
@@ -514,8 +565,11 @@ function normalizedStationName(value: string): string {
 }
 
 function sameStationArea(station: BusStation, position: Coordinates): boolean {
-  return station.positions.some(
-    (candidate) => haversineMeters(candidate, position) <= STATION_CLUSTER_RADIUS_METERS,
+  return canJoinStationCluster(
+    station.positions,
+    position,
+    STATION_CLUSTER_RADIUS_METERS,
+    haversineMeters,
   )
 }
 
@@ -526,26 +580,48 @@ function hasStationPosition(station: BusStation, position: Coordinates): boolean
 }
 
 function groupStops(rawStops: RawStop[]): BusStation[] {
+  const startedAt = performance.now()
   const grouped = new Map<string, BusStation>()
   const candidatesByName = new Map<string, BusStation[]>()
   const physicalKeys = new Set<string>()
   stationClusterKeyByStopKey = new Map()
 
-  for (const stop of rawStops) {
+  const sortedStops = rawStops.filter((stop) => {
+    const latitude = Number(stop.showLat ?? stop.latitude)
+    const longitude = Number(stop.showLon ?? stop.longitude)
+    return typeof stop.nameZh === 'string' &&
+      stop.nameZh.trim().length > 0 &&
+      validCoordinate(latitude, longitude)
+  }).sort((a, b) => {
+    const nameComparison = normalizedStationName(a.nameZh).localeCompare(
+      normalizedStationName(b.nameZh),
+      'zh-Hant',
+    )
+    if (nameComparison !== 0) return nameComparison
+    const latitudeComparison = Number(a.showLat ?? a.latitude) - Number(b.showLat ?? b.latitude)
+    if (latitudeComparison !== 0) return latitudeComparison
+    const longitudeComparison = Number(a.showLon ?? a.longitude) - Number(b.showLon ?? b.longitude)
+    if (longitudeComparison !== 0) return longitudeComparison
+    return Number(a.stopLocationId ?? Number.MAX_SAFE_INTEGER) -
+      Number(b.stopLocationId ?? Number.MAX_SAFE_INTEGER) || a.Id - b.Id
+  })
+
+  for (const stop of sortedStops) {
     const latitude = Number(stop.showLat ?? stop.latitude)
     const longitude = Number(stop.showLon ?? stop.longitude)
     if (!validCoordinate(latitude, longitude) || !stop.nameZh) continue
 
     const physicalKey = stationKeyForStop(stop, latitude, longitude)
-    physicalKeys.add(physicalKey)
+    const sourceKey = stationSourceKeyForStop(stop, latitude, longitude)
+    physicalKeys.add(sourceKey)
     const position = { latitude, longitude }
     const nameKey = normalizedStationName(stop.nameZh)
     const candidates = candidatesByName.get(nameKey) ?? []
     const nearbyStation = candidates.find(
       (candidate) => sameStationArea(candidate, position),
     )
-    const key = nearbyStation?.id ?? physicalKey
-    stationClusterKeyByStopKey.set(physicalKey, key)
+    const key = nearbyStation?.id ?? (grouped.has(physicalKey) ? sourceKey : physicalKey)
+    stationClusterKeyByStopKey.set(sourceKey, key)
     const stationStop: StationStop = {
       stopId: stop.Id,
       routeId: stop.routeId,
@@ -577,11 +653,25 @@ function groupStops(rawStops: RawStop[]): BusStation[] {
     candidatesByName.set(nameKey, candidates)
   }
 
+  const merged = mergeComplementaryStationClusters(
+    [...grouped.values()],
+    COMPLEMENTARY_STATION_CLUSTER_RADIUS_METERS,
+    haversineMeters,
+    normalizedStationName,
+  )
+  for (const [physicalKey, clusterKey] of stationClusterKeyByStopKey) {
+    stationClusterKeyByStopKey.set(
+      physicalKey,
+      merged.aliases.get(clusterKey) ?? clusterKey,
+    )
+  }
+
   console.log(
     '[taiwan-bus] station clustering:',
-    `${physicalKeys.size} physical -> ${grouped.size} logical`,
+    `${physicalKeys.size} physical -> ${merged.stations.length} logical`,
+    `${Math.round(performance.now() - startedAt)}ms`,
   )
-  return [...grouped.values()]
+  return merged.stations
 }
 
 function groupRouteStops(rawStops: RawStop[]): Map<string, RouteStop[]> {
@@ -600,13 +690,14 @@ function groupRouteStops(rawStops: RawStop[]): Map<string, RouteStop[]> {
     const key = `${stop.routeId}:${goBack}`
     const routeStops = grouped.get(key) ?? []
     const physicalKey = stationKeyForStop(stop, latitude, longitude)
+    const sourceKey = stationSourceKeyForStop(stop, latitude, longitude)
     routeStops.push({
       stopId: stop.Id,
       routeId: stop.routeId,
       goBack,
       seqNo: Number(stop.seqNo),
       name: stop.nameZh,
-      stationKey: stationClusterKeyByStopKey.get(physicalKey) ?? physicalKey,
+      stationKey: stationClusterKeyByStopKey.get(sourceKey) ?? physicalKey,
       latitude,
       longitude,
     })
@@ -620,6 +711,8 @@ function groupRouteStops(rawStops: RawStop[]): Map<string, RouteStop[]> {
 }
 
 function sortStationsByDistance(): void {
+  if (!stationDistancesDirty && visibleStations.length > 0) return
+  const startedAt = performance.now()
   for (const station of stations) {
     station.distanceMeters = Math.min(
       ...station.positions.map((position) => haversineMeters(currentLocation, position)),
@@ -628,6 +721,11 @@ function sortStationsByDistance(): void {
 
   stations.sort((a, b) => a.distanceMeters - b.distanceMeters)
   visibleStations = stations.slice(0, MAX_VISIBLE_STATIONS)
+  stationDistancesDirty = false
+  console.debug('[taiwan-bus] distance sort:', {
+    stations: stations.length,
+    milliseconds: Math.round(performance.now() - startedAt),
+  })
 }
 
 function formatDistance(meters: number): string {
@@ -699,19 +797,21 @@ function glassesFavoritesHeaderContent(): string {
 
 async function updateGlassesUpdateTime(): Promise<void> {
   if (pageMode !== 'detail' && pageMode !== 'route' && pageMode !== 'favorites') return
+  const token = currentPageToken()
   await glassesImageUpdateQueue
+  if (!isPageTokenCurrent(token)) return
   if (pageMode === 'favorites') {
     const success = favoritesLayoutMode === 'table'
       ? await upgradeGlassesText(new TextContainerUpgrade({
           containerID: 1,
           containerName: 'favorite-header',
           content: glassesFavoritesHeaderContent(),
-        }))
+        }), token)
       : await upgradeGlassesText(new TextContainerUpgrade({
           containerID: FAVORITES_CONTAINER_ID,
           containerName: 'favorite-row-0',
           content: glassesFavoritesFallbackText(),
-        }))
+        }), token)
     if (!success) console.error('[taiwan-bus] favorites time update failed')
     return
   }
@@ -801,31 +901,30 @@ function sanitizeFavoriteSettings(value: unknown): FavoriteSettings {
 }
 
 async function loadFavoriteSettings(): Promise<void> {
-  let stored = ''
+  let bridgeStored = ''
   try {
-    stored = await serializeBridgeCall(() => bridge.getLocalStorage(FAVORITES_STORAGE_KEY))
+    bridgeStored = await serializeBridgeCall(() => bridge.getLocalStorage(FAVORITES_STORAGE_KEY))
   } catch (error) {
     console.warn('[taiwan-bus] bridge favorites read failed:', error)
   }
-  if (!stored) {
-    try { stored = window.localStorage.getItem(FAVORITES_STORAGE_KEY) ?? '' } catch { /* ignored */ }
-  }
-  let settings = sanitizeFavoriteSettings(null)
-  if (stored) {
-    try { settings = sanitizeFavoriteSettings(JSON.parse(stored)) }
-    catch (error) { console.warn('[taiwan-bus] favorites JSON ignored:', error) }
-  }
+  let phoneStored = ''
+  try { phoneStored = window.localStorage.getItem(FAVORITES_STORAGE_KEY) ?? '' } catch { /* ignored */ }
+  const stored = chooseNewestStoredValue([bridgeStored, phoneStored])
+  const settings = sanitizeFavoriteSettings(stored?.value)
+  favoriteSettingsRevision = stored?.revision ?? 0
   favoriteGroups = settings.groups
   favoriteItems = settings.items
   activeFavoriteGroupId = settings.activeGroupId
 }
 
 async function saveFavoriteSettings(): Promise<void> {
-  const value = JSON.stringify({
+  favoriteSettingsRevision += 1
+  const settings = {
     groups: favoriteGroups,
     items: favoriteItems,
     activeGroupId: activeFavoriteGroupId,
-  } satisfies FavoriteSettings)
+  } satisfies FavoriteSettings
+  const value = encodeStoredValue(settings, favoriteSettingsRevision)
   try { window.localStorage.setItem(FAVORITES_STORAGE_KEY, value) } catch { /* ignored */ }
   try {
     const saved = await serializeBridgeCall(() => bridge.setLocalStorage(FAVORITES_STORAGE_KEY, value))
@@ -1000,8 +1099,11 @@ function glassesFavoriteRowContainers(): TextContainerProperty[] {
 }
 
 async function createGlassesFavoritesPage(): Promise<void> {
+  if (pageMode !== 'favorites') return
+  const token = currentPageToken()
   if (glassesFavoritesUpdatePromise) await glassesFavoritesUpdatePromise
   await glassesImageUpdateQueue
+  if (!isPageTokenCurrent(token)) return
   const header = new TextContainerProperty({
     xPosition: 0, yPosition: 0, width: 576, height: 87,
     borderWidth: 1, borderColor: 5, paddingLength: 7,
@@ -1014,12 +1116,13 @@ async function createGlassesFavoritesPage(): Promise<void> {
     textObject: [header, ...rows],
   })
   glassesFavoritesDiagnostic = null
-  let success = await rebuildGlassesPage(tablePage)
-  if (!success && pageMode === 'favorites') {
+  let success = await rebuildGlassesPage(tablePage, token)
+  if (!success && isPageTokenCurrent(token)) {
     console.warn('[taiwan-bus] 3-container favorites table rebuild returned false, retrying once')
     glassesFavoritesDiagnostic = 'G2 三容器表格第一次傳輸失敗，已序列化後重試。'
-    success = await rebuildGlassesPage(tablePage)
+    success = await rebuildGlassesPage(tablePage, token)
   }
+  if (!isPageTokenCurrent(token)) return
   favoritesLayoutMode = success ? 'table' : 'fallback'
   glassesFavoriteRenderedRows = success ? glassesFavoriteRows() : []
   if (success) console.info('[taiwan-bus] favorites table ready: 3 containers')
@@ -1037,6 +1140,7 @@ async function createGlassesFavoritesPage(): Promise<void> {
           content: glassesFavoritesFallbackText(), isEventCapture: 1,
         })],
       }),
+      token,
     )
     if (!fallbackSuccess) console.error('[taiwan-bus] favorites fallback rebuild failed')
   }
@@ -1044,12 +1148,13 @@ async function createGlassesFavoritesPage(): Promise<void> {
 
 async function performGlassesFavoritesTextUpdate(): Promise<void> {
   if (pageMode !== 'favorites') return
+  const token = currentPageToken()
   if (favoritesLayoutMode === 'fallback') {
     const success = await upgradeGlassesText(new TextContainerUpgrade({
       containerID: FAVORITES_CONTAINER_ID,
       containerName: 'favorite-row-0',
       content: glassesFavoritesFallbackText(),
-    }))
+    }), token)
     if (!success) console.error('[taiwan-bus] favorites fallback update failed')
     return
   }
@@ -1062,8 +1167,8 @@ async function performGlassesFavoritesTextUpdate(): Promise<void> {
       containerID,
       containerName: `favorite-row-${index}`,
       content: rows[index],
-    }))
-    if (pageMode !== 'favorites' || favoritesLayoutMode !== 'table') return
+    }), token)
+    if (!isPageTokenCurrent(token) || favoritesLayoutMode !== 'table') return
     if (success) glassesFavoriteRenderedRows[index] = rows[index]
     else console.error('[taiwan-bus] favorite row update failed:', index)
   }
@@ -1087,11 +1192,13 @@ function updateGlassesFavoritesText(): Promise<void> {
 async function showHome(): Promise<void> {
   clearEtaRefresh()
   pageMode = 'home'
+  const token = currentPageToken()
   selectedStation = null
   selectedRoute = null
   renderPhoneHome()
   if (glassesFavoritesUpdatePromise) await glassesFavoritesUpdatePromise
   await glassesImageUpdateQueue
+  if (!isPageTokenCurrent(token)) return
   const success = await rebuildGlassesPage(new RebuildPageContainer({
     containerTotalNum: 2,
     textObject: [new TextContainerProperty({
@@ -1110,7 +1217,7 @@ async function showHome(): Promise<void> {
       }),
       isEventCapture: 1,
     })],
-  }))
+  }), token)
   if (!success) console.error('[taiwan-bus] home rebuild failed')
 }
 
@@ -1190,12 +1297,17 @@ async function returnFromRoute(): Promise<void> {
 
 async function showStationList(): Promise<void> {
   clearEtaRefresh()
+  const renderEpoch = ++stationListRenderEpoch
   sortStationsByDistance()
+  const nextVisibleStations = [...visibleStations]
   pageMode = 'list'
+  const token = currentPageToken()
   selectedStation = null
   currentArrivals = []
-  renderPhoneStationList()
+  presentedArrivals.commit([])
+  renderPhoneStationList(nextVisibleStations)
   await glassesImageUpdateQueue
+  if (pageMode !== 'list' || stationListRenderEpoch !== renderEpoch) return
 
   const accuracy =
     locationSource === 'GPS' && currentLocation.accuracy
@@ -1227,10 +1339,10 @@ async function showStationList(): Promise<void> {
     containerID: LIST_CONTAINER_ID,
     containerName: 'stations',
     itemContainer: new ListItemContainerProperty({
-      itemCount: visibleStations.length,
+      itemCount: nextVisibleStations.length,
       itemWidth: 560,
       isItemSelectBorderEn: 1,
-      itemName: visibleStations.map(stationListLabel),
+      itemName: nextVisibleStations.map(stationListLabel),
     }),
     isEventCapture: 1,
   })
@@ -1241,9 +1353,12 @@ async function showStationList(): Promise<void> {
       textObject: [header],
       listObject: [list],
     }),
+    token,
   )
 
-  if (!success) console.error('[taiwan-bus] list rebuild failed')
+  if (pageMode !== 'list' || stationListRenderEpoch !== renderEpoch) return
+  if (success) presentedStations.commit(nextVisibleStations)
+  else console.error('[taiwan-bus] list rebuild failed')
 }
 
 async function showStationDetail(station: BusStation): Promise<void> {
@@ -1253,6 +1368,7 @@ async function showStationDetail(station: BusStation): Promise<void> {
   routeReturnMode = 'detail'
   selectedStation = station
   currentArrivals = []
+  presentedArrivals.commit([])
   arrivalPageStart = 0
   selectedArrivalIndex = 0
   selectedRoute = null
@@ -1267,39 +1383,16 @@ async function showStationDetail(station: BusStation): Promise<void> {
 }
 
 function buildArrivals(station: BusStation): Arrival[] {
-  const arrivals = new Map<string, Arrival>()
-  for (const stop of station.stops) {
-    const route = routeInfo.get(stop.routeId)
-    if (!route) continue
-
-    const eta = latestEtaByStop.get(`${stop.routeId}:${stop.stopId}`)
-    const goBack = eta && ['0', '1'].includes(eta.GoBack)
-      ? Number(eta.GoBack)
-      : stop.goBack
-    const destination = goBack === 1 ? route.departure : route.destination
-    const key = `${stop.routeId}:${goBack}`
-    const estimateSeconds = eta ? Number(eta.EstimateTime) : null
-    const existing = arrivals.get(key)
-
-    if (
-      !existing ||
-      arrivalSortValue(estimateSeconds) < arrivalSortValue(existing.estimateSeconds)
-    ) {
-      arrivals.set(key, {
-        key,
-        routeId: stop.routeId,
-        goBack,
-        routeName: route.name,
-        destination: destination || '終點資料未提供',
-        estimateSeconds,
-      })
-    }
-  }
-
-  return [...arrivals.values()].sort(
-    (a, b) =>
-      arrivalSortValue(a.estimateSeconds) - arrivalSortValue(b.estimateSeconds) ||
-      a.routeName.localeCompare(b.routeName, 'zh-Hant', { numeric: true }),
+  const preferredDirections = new Map(
+    currentArrivals.map((arrival) => [arrival.routeId, arrival.goBack]),
+  )
+  const preferredRouteOrder = currentArrivals.map((arrival) => arrival.routeId)
+  return buildStationArrivals(
+    station.stops,
+    routeInfo,
+    latestEtaByStop,
+    preferredDirections,
+    preferredRouteOrder,
   )
 }
 
@@ -1374,7 +1467,9 @@ function glassesArrivalRowContainers(message?: string): TextContainerProperty[] 
 
 async function createGlassesArrivalPage(message?: string): Promise<void> {
   if (!selectedStation) return
+  const token = currentPageToken()
   await glassesImageUpdateQueue
+  if (!isPageTokenCurrent(token)) return
 
   const header = new TextContainerProperty({
     xPosition: 0,
@@ -1397,9 +1492,10 @@ async function createGlassesArrivalPage(message?: string): Promise<void> {
       containerTotalNum: 2 + rows.length,
       textObject: [header, glassesUpdateTimeContainer(), ...rows],
     }),
+    token,
   )
   glassesLayoutMode = success ? 'cards' : 'fallback'
-  if (!success) {
+  if (!success && isPageTokenCurrent(token)) {
     console.error('[taiwan-bus] arrival cards rejected, using fallback')
     await rebuildGlassesPage(
       new RebuildPageContainer({
@@ -1422,33 +1518,48 @@ async function createGlassesArrivalPage(message?: string): Promise<void> {
           }),
         ],
       }),
+      token,
     )
   }
 }
 
 async function updateGlassesArrivalText(message?: string): Promise<void> {
   if (!selectedStation || pageMode !== 'detail') return
+  const refreshEpoch = etaRefreshEpoch
+  const token = currentPageToken()
+  const arrivalSnapshot = [...currentArrivals]
   const rows = glassesArrivalRows(message)
   if (glassesLayoutMode === 'fallback') {
-    await upgradeGlassesText(
+    const success = await upgradeGlassesText(
       new TextContainerUpgrade({
         containerID: ETA_CONTAINER_IDS[0],
         containerName: 'arrival-row-0',
         content: rows.filter(Boolean).join('\n'),
       }),
+      token,
     )
+    if (success && pageMode === 'detail' && etaRefreshEpoch === refreshEpoch && !message) {
+      presentedArrivals.commit(arrivalSnapshot)
+    }
     return
   }
   for (const [index, containerID] of ETA_CONTAINER_IDS.entries()) {
+    if (pageMode !== 'detail' || etaRefreshEpoch !== refreshEpoch) return
     const success = await upgradeGlassesText(
       new TextContainerUpgrade({
         containerID,
         containerName: `arrival-row-${index}`,
         content: rows[index],
       }),
+      token,
     )
-    if (!success) console.error('[taiwan-bus] ETA row update failed:', index)
+    if (pageMode !== 'detail' || etaRefreshEpoch !== refreshEpoch) return
+    if (!success) {
+      console.error('[taiwan-bus] ETA row update failed:', index)
+      return
+    }
   }
+  if (!message) presentedArrivals.commitIf(arrivalSnapshot, true)
 }
 
 function currentRouteStops(): RouteStop[] {
@@ -1811,6 +1922,7 @@ function glassesRouteHeaderContainer(): TextContainerProperty | null {
 async function rebuildGlassesRouteFallback(
   refreshEpoch: number,
 ): Promise<DirectionImageUpdateStatus> {
+  const token: PageToken = { mode: 'route', epoch: refreshEpoch }
   const header = glassesRouteHeaderContainer()
   if (!header || pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return 'stale'
   const success = await rebuildGlassesPage(
@@ -1834,6 +1946,7 @@ async function rebuildGlassesRouteFallback(
         }),
       ],
     }),
+    token,
   )
   if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return 'stale'
   glassesLayoutMode = 'fallback'
@@ -1850,6 +1963,7 @@ async function rebuildGlassesRouteFallback(
 
 async function createGlassesRoutePage(refreshEpoch: number): Promise<void> {
   if (!selectedRoute) return
+  const token: PageToken = { mode: 'route', epoch: refreshEpoch }
   if (glassesFavoritesUpdatePromise) await glassesFavoritesUpdatePromise
   await glassesImageUpdateQueue
   if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return
@@ -1877,6 +1991,7 @@ async function createGlassesRoutePage(refreshEpoch: number): Promise<void> {
       textObject: [header, glassesUpdateTimeContainer(), ...rows],
       imageObject: directionImages,
     }),
+    token,
   )
   if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return
 
@@ -1902,6 +2017,7 @@ async function createGlassesRoutePage(refreshEpoch: number): Promise<void> {
 async function updateGlassesRouteText(message?: string): Promise<void> {
   if (!selectedRoute || pageMode !== 'route') return
   const refreshEpoch = etaRefreshEpoch
+  const token: PageToken = { mode: 'route', epoch: refreshEpoch }
   const rows = glassesRouteRows(message)
   if (glassesLayoutMode === 'fallback') {
     const success = await upgradeGlassesText(
@@ -1913,6 +2029,7 @@ async function updateGlassesRouteText(message?: string): Promise<void> {
           ...rows,
         ].filter(Boolean).join('\n'),
       }),
+      token,
     )
     if (!success) console.error('[taiwan-bus] route fallback text update failed')
     return
@@ -1936,6 +2053,7 @@ async function updateGlassesRouteText(message?: string): Promise<void> {
         containerName: `route-row-${index}`,
         content: rows[index],
       }),
+      token,
     )
     if (!success) console.error('[taiwan-bus] route row update failed:', index)
   }
@@ -2005,6 +2123,7 @@ async function refreshEta(
         refreshRouteId,
       )
     } else if (refreshMode === 'route' && busResult.status === 'rejected') {
+      busPlatesByStop = new Map()
       console.warn('[taiwan-bus] bus position load failed:', busResult.reason)
     }
     if (pageMode === 'detail') {
@@ -2072,8 +2191,10 @@ async function refreshEta(
 async function showError(message: string): Promise<void> {
   clearEtaRefresh()
   pageMode = 'error'
+  const token = currentPageToken()
   renderPhoneError(message)
   await glassesImageUpdateQueue
+  if (!isPageTokenCurrent(token)) return
   await rebuildGlassesPage(
     new RebuildPageContainer({
       containerTotalNum: 1,
@@ -2081,6 +2202,7 @@ async function showError(message: string): Promise<void> {
         textContainer(`台灣公車追蹤\n\n${message}\n\n點按重試\n雙擊離開`),
       ],
     }),
+    token,
   )
 }
 
@@ -2152,8 +2274,8 @@ async function beginLocationTracking(): Promise<void> {
   bridge.onAppLocationChanged((location) => {
     currentLocation = location
     locationSource = 'GPS'
+    stationDistancesDirty = true
     if (pageMode === 'list') void showStationList()
-    else sortStationsByDistance()
   })
 
   try {
@@ -2566,14 +2688,14 @@ async function deleteFavoriteGroup(groupId: string): Promise<void> {
   if (pageMode === 'favorites') await createGlassesFavoritesPage()
 }
 
-function renderPhoneStationList(): void {
+function renderPhoneStationList(stationList: readonly BusStation[]): void {
   emptyRoot()
   appRoot.append(createHeader('附近站牌', () => void showHome()))
 
   const list = document.createElement('section')
   list.className = 'station-list'
 
-  for (const station of visibleStations) {
+  for (const station of stationList) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'station-card'
@@ -2788,7 +2910,12 @@ async function loadBusData(): Promise<void> {
     if (stopsResult.status === 'rejected') throw stopsResult.reason
 
     stations = groupStops(stopsResult.value.BusInfo)
+    stationDistancesDirty = true
     stationById = new Map(stations.map((station) => [station.id, station]))
+    for (const [physicalKey, clusterKey] of stationClusterKeyByStopKey) {
+      const station = stationById.get(clusterKey)
+      if (station) stationById.set(physicalKey, station)
+    }
     routeStopsByDirection = groupRouteStops(stopsResult.value.BusInfo)
     if (stations.length === 0) throw new Error('站牌資料為空')
 
@@ -2841,8 +2968,8 @@ async function loadBusData(): Promise<void> {
     if (location) {
       currentLocation = location
       locationSource = 'GPS'
+      stationDistancesDirty = true
       if ((pageMode as PageMode) === 'list') await showStationList()
-      else sortStationsByDistance()
     }
 
     await beginLocationTracking()
