@@ -4,13 +4,13 @@ English | [繁體中文](README.md)
 
 A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
 
-Current version: `0.10.9`
+Current version: `0.10.11`
 
 ## Features
 
 - Starts from Taipei Main Station and automatically switches to the phone's GPS location when available.
 - Lists the 20 nearest stops by straight-line distance with their serving routes.
-- Merges same-named boarding points within 80 meters while preserving every physical StopID and direction for arrival lookup.
+- First forms physical same-name groups within 80 meters. Separate groups merge only when they share opposite directions of one route and every resulting position remains within a 150-meter diameter. Each location permits at most one complementary merge so it cannot chain through a third stop. Stop details show each route once, initially choose the soonest-arriving direction, keep that direction stable during refreshes, and still allow manual switching on the route page.
 - Refreshes live arrivals every five seconds without resetting phone scroll, G2 selection, or pagination.
 - Shows the full stop sequence, both directions, stop-level ETAs, the selected stop, and live vehicle plates.
 - Normalizes Route IDs and `pathAttributeId`, then maps vehicles within 500 meters to the nearest stop on the same route and direction.
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-Output: `taiwan-bus-g2-v0.10.9.ehpk`
+Output: `taiwan-bus-g2-v0.10.11.ehpk`
 
 You can inspect the final `dist` build first:
 
@@ -145,10 +145,10 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
-Version `0.10.9` was operated in the official Simulator `0.8.0` against the production real-time API. The exercised flows included home, favorites, nearby stops, stop details, route details, direction switching, every G2 gesture, rapid-return races, and plate rendering:
+Version `0.10.11` was operated in the official Simulator `0.8.0` against the production real-time API. The exercised flow covered conditional merging through 150 meters, nearby stops, and one-row-per-route stop details:
 
-- Final full regression: 192 events, `0` application errors, `0` fallbacks.
-- Final production `dist` smoke test: 80 events, `0` application errors, `0` fallbacks.
+- Tianmu Baseball Stadium (Zhongcheng) and Tianmu Baseball Stadium (Shidong) each appear once in the nearby list, and a Route ID appears only once within a stop detail.
+- Automated tests, the production build, packaging, and the Simulator gesture flow passed.
 - See [SIMULATOR_VALIDATION.md](SIMULATOR_VALIDATION.md) for the environment, exact steps, and captured evidence.
 
 The Simulator cannot fully replace BLE, Host, and G2 firmware testing. Direction images therefore retain format probing, bounded retries, cross-page invalidation, and a text compatibility layout.

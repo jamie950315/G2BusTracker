@@ -1,5 +1,6 @@
 import http from 'node:http'
 import https from 'node:https'
+import { canServeStale, staleCacheControl } from './cache-policy.mjs'
 
 const HOST = process.env.HOST ?? '127.0.0.1'
 const PORT = Number(process.env.PORT ?? 8893)
@@ -43,7 +44,7 @@ function fetchUpstream(pathname) {
       headers: {
         accept: 'application/octet-stream',
         'accept-encoding': 'identity',
-        'user-agent': 'taiwan-bus-g2-proxy/0.10.9',
+        'user-agent': 'taiwan-bus-g2-proxy/0.10.11',
       },
       timeout: 15_000,
     }, (upstream) => {
@@ -90,22 +91,28 @@ async function getFeed(pathname) {
   const feed = feeds.get(pathname)
   const cached = cache.get(pathname)
   const now = Date.now()
-  if (cached && now - cached.fetchedAt < feed.ttlMs) {
+  const cacheAgeMs = cached ? now - cached.fetchedAt : 0
+  if (cached && cacheAgeMs < feed.ttlMs) {
     return { entry: cached, cacheStatus: 'HIT', stale: false }
   }
 
-  if (cached) {
+  if (cached && canServeStale(feed.ttlMs, cacheAgeMs)) {
+    const wasRevalidating = inFlight.has(pathname)
     void refreshFeed(pathname).catch((error) => {
       console.error(new Date().toISOString(), pathname, 'background refresh failed', error)
     })
     return {
       entry: cached,
-      cacheStatus: inFlight.has(pathname) ? 'REVALIDATING' : 'STALE',
+      cacheStatus: wasRevalidating ? 'REVALIDATING' : 'STALE',
       stale: true,
     }
   }
 
-  return { entry: await refreshFeed(pathname), cacheStatus: 'MISS', stale: false }
+  return {
+    entry: await refreshFeed(pathname),
+    cacheStatus: cached ? 'EXPIRED' : 'MISS',
+    stale: false,
+  }
 }
 
 function feedHeaders(pathname, result) {
@@ -115,7 +122,7 @@ function feedHeaders(pathname, result) {
     ...corsHeaders(),
     'content-type': 'application/octet-stream',
     'content-length': result.entry.body.length,
-    'cache-control': dynamic ? 'no-store' : 'public, max-age=300',
+    'cache-control': staleCacheControl(result.stale, dynamic),
     age: Math.max(0, Math.floor((Date.now() - result.entry.fetchedAt) / 1_000)),
     'x-taiwan-bus-cache': result.cacheStatus,
     'x-taiwan-bus-upstream': UPSTREAM_ORIGIN,
@@ -142,7 +149,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         status: 'ok',
         service: 'taiwan-bus-g2-proxy',
-        version: '0.10.9',
+        version: '0.10.11',
         upstream: UPSTREAM_ORIGIN,
         checkedAt: new Date().toISOString(),
       })

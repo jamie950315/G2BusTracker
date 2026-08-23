@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/arrivals.ts",
+    "src/presented-list.ts",
+    "src/station-clustering.ts",
+    "src/versioned-storage.ts",
+    "server/cache-policy.mjs",
+    "tests/**/*.ts"
+  ]
+}
