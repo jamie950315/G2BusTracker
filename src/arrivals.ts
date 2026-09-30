@@ -26,6 +26,19 @@ export interface Arrival {
   estimateSeconds: number | null
 }
 
+export function parseEstimateSeconds(value: unknown): number | null {
+  let seconds: number
+  if (typeof value === 'number') {
+    seconds = value
+  } else if (typeof value === 'string' && /^[+-]?\d+(?:\.\d+)?$/.test(value.trim())) {
+    seconds = Number(value.trim())
+  } else {
+    return null
+  }
+  if (!Number.isFinite(seconds)) return null
+  return seconds >= 0 || [-1, -2, -3, -4].includes(seconds) ? seconds : null
+}
+
 function arrivalSortValue(seconds: number | null): number {
   if (seconds === null || seconds < 0) return 1_000_000 + Math.abs(seconds ?? 99)
   return seconds
@@ -52,10 +65,7 @@ export function buildStationArrivals(
     const goBack = eta && ['0', '1'].includes(eta.GoBack)
       ? Number(eta.GoBack)
       : stop.goBack
-    const parsedEstimateSeconds = eta ? Number(eta.EstimateTime) : null
-    const estimateSeconds = parsedEstimateSeconds !== null && Number.isFinite(parsedEstimateSeconds)
-      ? parsedEstimateSeconds
-      : null
+    const estimateSeconds = parseEstimateSeconds(eta?.EstimateTime)
     const candidate: Arrival = {
       key: String(stop.routeId),
       routeId: stop.routeId,

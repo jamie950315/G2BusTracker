@@ -1,6 +1,6 @@
 import http from 'node:http'
-import https from 'node:https'
 import { canServeStale, staleCacheControl } from './cache-policy.mjs'
+import { fetchUpstream } from './upstream-fetch.mjs'
 
 const HOST = process.env.HOST ?? '127.0.0.1'
 const PORT = Number(process.env.PORT ?? 8893)
@@ -38,46 +38,13 @@ function sendJson(response, statusCode, payload, extraHeaders = {}) {
   response.end(body)
 }
 
-function fetchUpstream(pathname) {
-  return new Promise((resolve, reject) => {
-    const request = https.get(`${UPSTREAM_ORIGIN}${pathname}`, {
-      headers: {
-        accept: 'application/octet-stream',
-        'accept-encoding': 'identity',
-        'user-agent': 'taiwan-bus-g2-proxy/0.10.11',
-      },
-      timeout: 15_000,
-    }, (upstream) => {
-      const chunks = []
-      upstream.on('data', (chunk) => chunks.push(chunk))
-      upstream.on('end', () => {
-        if (upstream.statusCode !== 200) {
-          reject(new Error(`upstream HTTP ${upstream.statusCode ?? 0}`))
-          return
-        }
-        const body = Buffer.concat(chunks)
-        if (body.length === 0) {
-          reject(new Error('upstream returned an empty body'))
-          return
-        }
-        resolve({
-          body,
-          fetchedAt: Date.now(),
-          etag: upstream.headers.etag,
-          lastModified: upstream.headers['last-modified'],
-        })
-      })
-    })
-    request.on('timeout', () => request.destroy(new Error('upstream timeout')))
-    request.on('error', reject)
-  })
-}
-
 function refreshFeed(pathname) {
   let pending = inFlight.get(pathname)
   if (pending) return pending
 
-  pending = fetchUpstream(pathname)
+  pending = fetchUpstream(`${UPSTREAM_ORIGIN}${pathname}`, {
+    userAgent: 'taiwan-bus-g2-proxy/0.10.11',
+  })
     .then((entry) => {
       cache.set(pathname, entry)
       return entry

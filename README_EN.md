@@ -8,7 +8,7 @@ Current version: `0.10.11`
 
 ## Features
 
-- Starts from Taipei Main Station and automatically switches to the phone's GPS location when available.
+- Starts from Taipei Main Station and automatically switches to the phone's GPS location when available. GPS runs only on the nearby-stop page and stops when leaving it.
 - Lists the 20 nearest stops by straight-line distance with their serving routes.
 - First forms physical same-name groups within 80 meters. Separate groups merge only when they share opposite directions of one route and every resulting position remains within a 150-meter diameter. Each location permits at most one complementary merge so it cannot chain through a third stop. Stop details show each route once, initially choose the soonest-arriving direction, keep that direction stable during refreshes, and still allow manual switching on the route page.
 - Refreshes live arrivals every five seconds without resetting phone scroll, G2 selection, or pagination.
@@ -45,7 +45,7 @@ Phone location is used locally only to calculate distance and sort nearby stops.
 
 ## Requirements
 
-- Node.js `^20.19.0` or `>=22.12.0`
+- Node.js `>=22.12.0` (including TypeScript type stripping for tests)
 - npm
 - Even Realities App / Even Hub Host `2.0.0` or later
 - Even Hub SDK `0.0.12`

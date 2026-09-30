@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildStationArrivals } from '../src/arrivals.ts'
+import { buildStationArrivals, parseEstimateSeconds } from '../src/arrivals.ts'
+
+test('parses ETA seconds and known service status codes without coercing absent data', () => {
+  for (const value of ['0', '30', ' 60 ', '90.5', 120, '-1', '-2', '-3', '-4']) {
+    assert.equal(parseEstimateSeconds(value), Number(value))
+  }
+  for (const value of ['', '   ', null, undefined, false, 'invalid', 'Infinity', Infinity, NaN, '0x10', '1e3', '-5', '-1.5']) {
+    assert.equal(parseEstimateSeconds(value), null)
+  }
+})
 
 test('shows one entry per route and keeps the direction with the soonest arrival', () => {
   const arrivals = buildStationArrivals(
@@ -152,4 +161,25 @@ test('normalizes malformed ETA values to waiting data', () => {
   )
 
   assert.equal(arrivals[0]?.estimateSeconds, null)
+})
+
+test('does not let blank ETA data displace a valid arrival from the opposite direction', () => {
+  for (const blankEstimate of ['', '   ']) {
+    const arrivals = buildStationArrivals(
+      [
+        { stopId: 101, routeId: 42, goBack: 0 },
+        { stopId: 202, routeId: 42, goBack: 1 },
+      ],
+      new Map([
+        [42, { name: '42', departure: 'A', destination: 'B' }],
+      ]),
+      new Map([
+        ['42:101', { RouteID: 42, StopID: 101, EstimateTime: blankEstimate, GoBack: '0' }],
+        ['42:202', { RouteID: 42, StopID: 202, EstimateTime: '60', GoBack: '1' }],
+      ]),
+    )
+
+    assert.equal(arrivals[0]?.goBack, 1)
+    assert.equal(arrivals[0]?.estimateSeconds, 60)
+  }
 })

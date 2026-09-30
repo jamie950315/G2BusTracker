@@ -12,12 +12,12 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
   waitForEvenAppBridge,
-  type AppLocation,
 } from '@evenrealities/even_hub_sdk'
 import { ungzip } from 'pako'
 import notoSansTcUrl from '@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-traditional-600-normal.woff2?url'
-import { buildStationArrivals } from './arrivals.ts'
+import { buildStationArrivals, parseEstimateSeconds } from './arrivals.ts'
 import { PresentedList } from './presented-list.ts'
+import { PresentedText } from './presented-text.ts'
 import {
   COMPLEMENTARY_STATION_CLUSTER_RADIUS_METERS,
   canJoinStationCluster,
@@ -63,7 +63,10 @@ const glassesDirectionFont = new FontFace(
   { weight: '600' },
 )
 document.fonts.add(glassesDirectionFont)
-const glassesDirectionFontReady = glassesDirectionFont.load()
+const glassesDirectionFontReady = glassesDirectionFont.load().catch((error) => {
+  console.warn('[taiwan-bus] direction font load failed:', error)
+  return null
+})
 
 interface Coordinates {
   latitude: number
@@ -203,6 +206,12 @@ interface PageToken {
 
 const bridge = await waitForEvenAppBridge()
 let bridgeCallQueue: Promise<void> = Promise.resolve()
+const presentedText = new PresentedText()
+let appActive = true
+let appDisposed = false
+let unsubscribeLocation: (() => void) | null = null
+let locationTrackingRequested = false
+const dataRequestControllers = new Set<AbortController>()
 
 function serializeBridgeCall<T>(operation: () => Promise<T>): Promise<T> {
   const result = bridgeCallQueue.then(operation, operation)
@@ -215,27 +224,51 @@ function currentPageToken(): PageToken {
 }
 
 function isPageTokenCurrent(token: PageToken): boolean {
-  return pageMode === token.mode && etaRefreshEpoch === token.epoch
+  return appActive && pageMode === token.mode && etaRefreshEpoch === token.epoch
 }
 
 function rebuildGlassesPage(
   container: RebuildPageContainer,
   token = currentPageToken(),
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
-  return serializeBridgeCall(() =>
-    isPageTokenCurrent(token) ? bridge.rebuildPageContainer(container) : Promise.resolve(false))
+  return serializeBridgeCall(async () => {
+    if (!isPageTokenCurrent(token) || !isCurrent()) return false
+    presentedText.reset()
+    let success = false
+    try { success = await bridge.rebuildPageContainer(container) } catch (error) {
+      if (isPageTokenCurrent(token)) console.error('[taiwan-bus] rebuild exception:', error)
+    }
+    if (success && isPageTokenCurrent(token) && isCurrent()) {
+      presentedText.reset(container.textObject)
+    }
+    return success
+  })
 }
 
 function upgradeGlassesText(
   container: TextContainerUpgrade,
   token = currentPageToken(),
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
-  return serializeBridgeCall(() =>
-    isPageTokenCurrent(token) ? bridge.textContainerUpgrade(container) : Promise.resolve(false))
+  return serializeBridgeCall(async () => {
+    if (!isPageTokenCurrent(token) || !isCurrent()) return false
+    if (presentedText.matches(container)) return true
+    let success = false
+    try { success = await bridge.textContainerUpgrade(container) } catch (error) {
+      if (isPageTokenCurrent(token)) console.error('[taiwan-bus] text upgrade exception:', error)
+    }
+    if (success && isPageTokenCurrent(token) && isCurrent()) presentedText.commit(container)
+    return success
+  })
 }
 
-function updateGlassesImage(data: ImageRawDataUpdate): Promise<ImageRawDataUpdateResult> {
-  return serializeBridgeCall(() => bridge.updateImageRawData(data))
+function updateGlassesImage(
+  data: ImageRawDataUpdate,
+  isCurrent: () => boolean,
+): Promise<ImageRawDataUpdateResult | null> {
+  return serializeBridgeCall(() =>
+    appActive && isCurrent() ? bridge.updateImageRawData(data) : Promise.resolve(null))
 }
 
 function shutDownGlassesPage(exitMode: number): Promise<boolean> {
@@ -255,6 +288,7 @@ let stationClusterKeyByStopKey = new Map<string, string>()
 let latestEtaByStop = new Map<string, RawEta>()
 let busPlatesByStop = new Map<string, string[]>()
 let lastDataUpdateTime = '--:--:--'
+let lastDataSourceUpdateTime: string | undefined
 let currentLocation: LocatedCoordinates = DEFAULT_LOCATION
 let locationSource: '預設台北' | 'GPS' = '預設台北'
 let selectedStation: BusStation | null = null
@@ -277,13 +311,14 @@ let activeFavoriteGroupId = 'default'
 let favoriteSettingsRevision = 0
 let favoriteSelectedIndex = 0
 let favoritePageStart = 0
+const presentedFavoriteEntries = new PresentedList<FavoriteEntry>()
+let presentedFavoriteSelectedIndex = 0
 let phoneFavoriteView: PhoneFavoriteView = 'list'
 let favoriteSearchQuery = ''
 let favoriteSearchRouteId: number | null = null
 let favoriteSearchDirection = 0
 let favoritesLayoutMode: 'table' | 'fallback' = 'table'
 let glassesFavoritesDiagnostic: string | null = null
-let glassesFavoriteRenderedRows: string[] = []
 let glassesFavoritesUpdatePending = false
 let glassesFavoritesUpdatePromise: Promise<void> | null = null
 let glassesLayoutMode: 'cards' | 'fallback' = 'cards'
@@ -292,7 +327,11 @@ let glassesImageUpdateQueue: Promise<void> = Promise.resolve()
 let glassesImageDiagnostic: string | null = null
 let glassesRouteImageEpoch = 0
 let preferredDirectionImageFormat: DirectionImageFormat | null = null
+let glassesRoutePageReady: Promise<void> = Promise.resolve()
+let glassesRouteTextQueue: Promise<void> = Promise.resolve()
 const inFlightDataRequests = new Map<string, Promise<unknown>>()
+let phoneArrivalStructure = ''
+let phoneRouteStructure = ''
 
 const appRoot = document.createElement('main')
 appRoot.className = 'app-shell'
@@ -336,7 +375,22 @@ if (startupResult !== 0) {
 
 renderPhoneLoading()
 
-bridge.onEvenHubEvent((event) => {
+const unsubscribeHub = bridge.onEvenHubEvent((event) => {
+  const lifecycleEvent = event.sysEvent?.eventType
+  if (lifecycleEvent === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+    void resumeApp()
+    return
+  }
+  if (lifecycleEvent === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+    suspendApp()
+    return
+  }
+  if (lifecycleEvent === OsEventTypeList.SYSTEM_EXIT_EVENT ||
+      lifecycleEvent === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
+    disposeApp()
+    return
+  }
+  if (!appActive) return
   const listEvent = event.listEvent
 
   if (listEvent?.containerID === HOME_LIST_CONTAINER_ID && pageMode === 'home') {
@@ -392,6 +446,10 @@ bridge.onEvenHubEvent((event) => {
       sysEvent.eventType === OsEventTypeList.CLICK_EVENT ||
       sysEvent.eventType === undefined
     ) {
+      if (pageMode === 'detail' && presentedArrivals.length === 0) {
+        void refreshEta()
+        return
+      }
       const presentedArrival = presentedArrivals.at(selectedArrivalIndex)
       if (pageMode === 'detail' && presentedArrival) {
         void showRouteDetail(presentedArrival)
@@ -453,7 +511,7 @@ bridge.onEvenHubEvent((event) => {
         const arrival = presentedArrivals.at(selectedArrivalIndex)
         if (arrival) {
           void showRouteDetail(arrival)
-        }
+        } else void refreshEta()
         break
     }
     return
@@ -770,6 +828,7 @@ function applyEtaPayload(payload: TaipeiBusPayload<RawEta>): void {
     payload.BusInfo.map((eta) => [`${eta.RouteID}:${eta.StopID}`, eta]),
   )
   lastDataUpdateTime = formatDataUpdateTime(payload.EssentialInfo?.UpdateTime)
+  lastDataSourceUpdateTime = payload.EssentialInfo?.UpdateTime
 }
 
 function glassesUpdateTimeContainer(): TextContainerProperty {
@@ -859,9 +918,61 @@ function startEtaRefreshTimer(
   refreshEpoch: number,
   refresh: () => Promise<void>,
 ): void {
-  if (pageMode !== expectedPage || etaRefreshEpoch !== refreshEpoch) return
+  if (!appActive || pageMode !== expectedPage || etaRefreshEpoch !== refreshEpoch) return
   etaRefreshTimer = window.setInterval(() => void refresh(), ETA_REFRESH_MS)
 }
+
+function stopLocationTracking(): void {
+  unsubscribeLocation?.()
+  unsubscribeLocation = null
+  if (locationTrackingRequested) {
+    locationTrackingRequested = false
+    void serializeBridgeCall(() => bridge.stopAppLocationUpdates()).catch((error) => {
+      console.warn('[taiwan-bus] location stop failed:', error)
+    })
+  }
+}
+
+function suspendApp(): void {
+  if (!appActive) return
+  appActive = false
+  clearEtaRefresh()
+  glassesRouteImageEpoch += 1
+  for (const controller of dataRequestControllers) controller.abort()
+  stopLocationTracking()
+}
+
+function disposeApp(): void {
+  suspendApp()
+  appDisposed = true
+  unsubscribeHub()
+}
+
+async function resumeApp(): Promise<void> {
+  if (appActive || appDisposed) return
+  appActive = true
+  void beginLocationTracking()
+  const refreshEpoch = etaRefreshEpoch
+  const mode = pageMode
+  if (mode === 'favorites') {
+    await refreshFavoriteEta(createGlassesFavoritesPage())
+    startEtaRefreshTimer(mode, refreshEpoch, refreshFavoriteEta)
+  } else if (mode === 'detail') {
+    await refreshEta(createGlassesArrivalPage())
+    startEtaRefreshTimer(mode, refreshEpoch, refreshEta)
+  } else if (mode === 'route') {
+    glassesRoutePageReady = createGlassesRoutePage(refreshEpoch)
+    await refreshEta(glassesRoutePageReady)
+    startEtaRefreshTimer(mode, refreshEpoch, refreshEta)
+  } else if (mode === 'list') await showStationList()
+  else if (mode === 'home') await showHome()
+  else if (!isLoading) void loadBusData()
+}
+
+window.addEventListener('pagehide', (event) => event.persisted ? suspendApp() : disposeApp())
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) void resumeApp()
+})
 
 function makeId(prefix: string): string {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
@@ -960,7 +1071,7 @@ function favoriteArrival(item: FavoriteItem, station: BusStation): Arrival {
     // GetEstimateTime can use GoBack 2/3 even when GetStop uses 0/1.
     // The direction-specific StopID set above is the dependable join key.
     if (!eta) continue
-    const seconds = Number(eta.EstimateTime)
+    const seconds = parseEstimateSeconds(eta.EstimateTime)
     if (estimateSeconds === null || arrivalSortValue(seconds) < arrivalSortValue(estimateSeconds)) {
       estimateSeconds = seconds
     }
@@ -1111,6 +1222,8 @@ async function createGlassesFavoritesPage(): Promise<void> {
     content: glassesFavoritesHeaderContent(), isEventCapture: 0,
   })
   const rows = glassesFavoriteRowContainers()
+  const entries = currentFavoriteEntries()
+  const selectedIndex = favoriteSelectedIndex
   const tablePage = new RebuildPageContainer({
     containerTotalNum: 1 + rows.length,
     textObject: [header, ...rows],
@@ -1124,11 +1237,17 @@ async function createGlassesFavoritesPage(): Promise<void> {
   }
   if (!isPageTokenCurrent(token)) return
   favoritesLayoutMode = success ? 'table' : 'fallback'
-  glassesFavoriteRenderedRows = success ? glassesFavoriteRows() : []
+  if (success) {
+    presentedFavoriteEntries.commit(entries)
+    presentedFavoriteSelectedIndex = selectedIndex
+  }
   if (success) console.info('[taiwan-bus] favorites table ready: 3 containers')
   if (!success) {
     glassesFavoritesDiagnostic = 'G2 三容器表格連續兩次傳輸失敗；SDK 僅回傳 false，已使用單容器相容模式。'
     console.error('[taiwan-bus] 3-container favorites table rejected, using 1-container fallback')
+    const fallbackEntries = currentFavoriteEntries()
+    const fallbackContent = glassesFavoritesFallbackText()
+    const fallbackSelectedIndex = favoriteSelectedIndex
     const fallbackSuccess = await rebuildGlassesPage(
       new RebuildPageContainer({
         containerTotalNum: 1,
@@ -1137,11 +1256,15 @@ async function createGlassesFavoritesPage(): Promise<void> {
           borderWidth: 0, borderColor: 5, paddingLength: 7,
           containerID: FAVORITES_CONTAINER_ID,
           containerName: 'favorite-row-0',
-          content: glassesFavoritesFallbackText(), isEventCapture: 1,
+          content: fallbackContent, isEventCapture: 1,
         })],
       }),
       token,
     )
+    if (fallbackSuccess && isPageTokenCurrent(token)) {
+      presentedFavoriteEntries.commit(fallbackEntries)
+      presentedFavoriteSelectedIndex = fallbackSelectedIndex
+    }
     if (!fallbackSuccess) console.error('[taiwan-bus] favorites fallback rebuild failed')
   }
 }
@@ -1149,28 +1272,42 @@ async function createGlassesFavoritesPage(): Promise<void> {
 async function performGlassesFavoritesTextUpdate(): Promise<void> {
   if (pageMode !== 'favorites') return
   const token = currentPageToken()
+  const entries = currentFavoriteEntries()
   if (favoritesLayoutMode === 'fallback') {
+    const content = glassesFavoritesFallbackText()
+    const selectedIndex = favoriteSelectedIndex
     const success = await upgradeGlassesText(new TextContainerUpgrade({
       containerID: FAVORITES_CONTAINER_ID,
       containerName: 'favorite-row-0',
-      content: glassesFavoritesFallbackText(),
+      content,
     }), token)
+    if (success && isPageTokenCurrent(token)) {
+      presentedFavoriteEntries.commit(entries)
+      presentedFavoriteSelectedIndex = selectedIndex
+    }
     if (!success) console.error('[taiwan-bus] favorites fallback update failed')
     return
   }
 
   const rows = glassesFavoriteRows()
+  const selectedIndex = favoriteSelectedIndex
+  let complete = true
   for (const [index, containerID] of FAVORITES_ROW_CONTAINER_IDS.entries()) {
     if (pageMode !== 'favorites' || favoritesLayoutMode !== 'table') return
-    if (rows[index] === glassesFavoriteRenderedRows[index]) continue
     const success = await upgradeGlassesText(new TextContainerUpgrade({
       containerID,
       containerName: `favorite-row-${index}`,
       content: rows[index],
     }), token)
     if (!isPageTokenCurrent(token) || favoritesLayoutMode !== 'table') return
-    if (success) glassesFavoriteRenderedRows[index] = rows[index]
-    else console.error('[taiwan-bus] favorite row update failed:', index)
+    if (!success) {
+      complete = false
+      console.error('[taiwan-bus] favorite row update failed:', index)
+    }
+  }
+  if (complete && isPageTokenCurrent(token)) {
+    presentedFavoriteEntries.commit(entries)
+    presentedFavoriteSelectedIndex = selectedIndex
   }
 }
 
@@ -1191,6 +1328,7 @@ function updateGlassesFavoritesText(): Promise<void> {
 
 async function showHome(): Promise<void> {
   clearEtaRefresh()
+  stopLocationTracking()
   pageMode = 'home'
   const token = currentPageToken()
   selectedStation = null
@@ -1223,8 +1361,10 @@ async function showHome(): Promise<void> {
 
 async function showFavorites(resetSelection = true): Promise<void> {
   clearEtaRefresh()
+  stopLocationTracking()
   const refreshEpoch = etaRefreshEpoch
   pageMode = 'favorites'
+  presentedFavoriteEntries.commit([])
   phoneFavoriteView = 'list'
   if (resetSelection) {
     favoriteSelectedIndex = 0
@@ -1250,7 +1390,11 @@ async function cycleFavoriteGroup(): Promise<void> {
 async function refreshFavoriteEta(
   glassesReady: Promise<void> = Promise.resolve(),
 ): Promise<void> {
-  if (pageMode !== 'favorites' || isRefreshingEta) return
+  if (!appActive || pageMode !== 'favorites' || isRefreshingEta) return
+  if (currentFavoriteEntries().length === 0) {
+    await glassesReady
+    return
+  }
   const refreshEpoch = etaRefreshEpoch
   isRefreshingEta = true
   try {
@@ -1278,7 +1422,7 @@ async function refreshFavoriteEta(
 }
 
 async function openSelectedFavoriteRoute(): Promise<void> {
-  const entry = currentFavoriteEntries()[favoriteSelectedIndex]
+  const entry = presentedFavoriteEntries.at(presentedFavoriteSelectedIndex)
   if (!entry) return
   await openFavoriteRoute(entry)
 }
@@ -1295,7 +1439,7 @@ async function returnFromRoute(): Promise<void> {
   else await showStationList()
 }
 
-async function showStationList(): Promise<void> {
+async function showStationList(refreshLocation = true): Promise<void> {
   clearEtaRefresh()
   const renderEpoch = ++stationListRenderEpoch
   sortStationsByDistance()
@@ -1359,10 +1503,14 @@ async function showStationList(): Promise<void> {
   if (pageMode !== 'list' || stationListRenderEpoch !== renderEpoch) return
   if (success) presentedStations.commit(nextVisibleStations)
   else console.error('[taiwan-bus] list rebuild failed')
+  if (refreshLocation && isPageTokenCurrent(token)) {
+    void beginLocationTracking()
+  }
 }
 
 async function showStationDetail(station: BusStation): Promise<void> {
   clearEtaRefresh()
+  stopLocationTracking()
   const refreshEpoch = etaRefreshEpoch
   pageMode = 'detail'
   routeReturnMode = 'detail'
@@ -1494,6 +1642,7 @@ async function createGlassesArrivalPage(message?: string): Promise<void> {
     }),
     token,
   )
+  if (!isPageTokenCurrent(token)) return
   glassesLayoutMode = success ? 'cards' : 'fallback'
   if (!success && isPageTokenCurrent(token)) {
     console.error('[taiwan-bus] arrival cards rejected, using fallback')
@@ -1595,6 +1744,7 @@ function isCurrentRouteImageUpdate(
   activeDirection: number,
 ): boolean {
   return pageMode === 'route' &&
+    appActive &&
     etaRefreshEpoch === refreshEpoch &&
     glassesRouteImageEpoch === imageEpoch &&
     selectedDirection === activeDirection
@@ -1672,8 +1822,9 @@ async function sendDirectionImage(
             containerName,
             imageData,
           }),
+          isCurrent,
         )
-        if (!isCurrent()) return 'stale'
+        if (result === null || !isCurrent()) return 'stale'
         if (ImageRawDataUpdateResult.isSuccess(result)) {
           if (preferredDirectionImageFormat !== format) {
             preferredDirectionImageFormat = format
@@ -1729,7 +1880,7 @@ async function updateGlassesDirectionTabs(
   imageEpoch: number,
 ): Promise<DirectionImageUpdateStatus> {
   if (!force && glassesDirectionTabsDirection === selectedDirection) return 'success'
-  await glassesDirectionFontReady
+  if (!await glassesDirectionFontReady) return 'failed'
   const activeDirection = selectedDirection
   const isCurrent = () => isCurrentRouteImageUpdate(
     refreshEpoch,
@@ -1742,7 +1893,12 @@ async function updateGlassesDirectionTabs(
     [0, ROUTE_DIRECTION_CONTAINER_ID],
     [1, ROUTE_DIRECTION_SECOND_CONTAINER_ID],
   ] as const) {
-    const assets = await directionTabImageAssets(direction, activeDirection)
+    let assets: DirectionTabImageAssets | null
+    try { assets = await directionTabImageAssets(direction, activeDirection) } catch (error) {
+      console.error('[taiwan-bus] direction image rendering failed:', error)
+      glassesImageDiagnostic = 'Direction image rendering failed'
+      return 'failed'
+    }
     if (!assets || !isCurrent()) return assets ? 'stale' : 'failed'
     const status = await sendDirectionImage(direction, containerID, assets, isCurrent)
     if (status !== 'success') {
@@ -1776,7 +1932,7 @@ function centerRouteOnSelectedStation(): void {
 
 function routeStopEstimate(stop: RouteStop): number | null {
   const eta = latestEtaByStop.get(`${stop.routeId}:${stop.stopId}`)
-  return eta ? Number(eta.EstimateTime) : null
+  return parseEstimateSeconds(eta?.EstimateTime)
 }
 
 function routeStopKey(stop: RouteStop): string {
@@ -1921,10 +2077,11 @@ function glassesRouteHeaderContainer(): TextContainerProperty | null {
 
 async function rebuildGlassesRouteFallback(
   refreshEpoch: number,
+  isCurrent: () => boolean = () => true,
 ): Promise<DirectionImageUpdateStatus> {
   const token: PageToken = { mode: 'route', epoch: refreshEpoch }
   const header = glassesRouteHeaderContainer()
-  if (!header || pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return 'stale'
+  if (!header || !isPageTokenCurrent(token) || !isCurrent()) return 'stale'
   const success = await rebuildGlassesPage(
     new RebuildPageContainer({
       containerTotalNum: 3,
@@ -1947,10 +2104,14 @@ async function rebuildGlassesRouteFallback(
       ],
     }),
     token,
+    isCurrent,
   )
-  if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return 'stale'
-  glassesLayoutMode = 'fallback'
-  glassesDirectionTabsDirection = null
+  if (!isPageTokenCurrent(token)) return 'stale'
+  if (success) {
+    glassesLayoutMode = 'fallback'
+    glassesDirectionTabsDirection = null
+  }
+  if (!isCurrent()) return 'stale'
   if (success) {
     glassesImageDiagnostic = null
     console.warn('[taiwan-bus] route image tabs unavailable; text direction row ready')
@@ -1997,6 +2158,7 @@ async function createGlassesRoutePage(refreshEpoch: number): Promise<void> {
 
   let directionStatus: DirectionImageUpdateStatus = 'failed'
   if (success) {
+    glassesLayoutMode = 'cards'
     await waitForBridgeSettle(ROUTE_IMAGE_INITIAL_DELAY_MS)
     if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return
     directionStatus = await updateGlassesDirectionTabs(
@@ -2014,10 +2176,30 @@ async function createGlassesRoutePage(refreshEpoch: number): Promise<void> {
   await rebuildGlassesRouteFallback(refreshEpoch)
 }
 
-async function updateGlassesRouteText(message?: string): Promise<void> {
-  if (!selectedRoute || pageMode !== 'route') return
+function updateGlassesRouteText(message?: string): Promise<void> {
+  if (!selectedRoute || pageMode !== 'route' || !appActive) return Promise.resolve()
   const refreshEpoch = etaRefreshEpoch
+  const imageEpoch = ++glassesRouteImageEpoch
+  const activeDirection = selectedDirection
+  const update = glassesRouteTextQueue.then(async () => {
+    await glassesRoutePageReady
+    if (!isCurrentRouteImageUpdate(refreshEpoch, imageEpoch, activeDirection)) return
+    await performGlassesRouteTextUpdate(message, refreshEpoch, imageEpoch, activeDirection)
+  })
+  glassesRouteTextQueue = update.catch((error) => {
+    console.error('[taiwan-bus] route text update exception:', error)
+  })
+  return glassesRouteTextQueue
+}
+
+async function performGlassesRouteTextUpdate(
+  message: string | undefined,
+  refreshEpoch: number,
+  imageEpoch: number,
+  activeDirection: number,
+): Promise<void> {
   const token: PageToken = { mode: 'route', epoch: refreshEpoch }
+  const isCurrent = () => isCurrentRouteImageUpdate(refreshEpoch, imageEpoch, activeDirection)
   const rows = glassesRouteRows(message)
   if (glassesLayoutMode === 'fallback') {
     const success = await upgradeGlassesText(
@@ -2030,23 +2212,24 @@ async function updateGlassesRouteText(message?: string): Promise<void> {
         ].filter(Boolean).join('\n'),
       }),
       token,
+      isCurrent,
     )
-    if (!success) console.error('[taiwan-bus] route fallback text update failed')
+    if (!success && isCurrent()) console.error('[taiwan-bus] route fallback text update failed')
     return
   }
   const directionStatus = await updateGlassesDirectionTabs(
     false,
     refreshEpoch,
-    ++glassesRouteImageEpoch,
+    imageEpoch,
   )
-  if (directionStatus === 'stale') return
+  if (directionStatus === 'stale' || !isCurrent()) return
   if (directionStatus === 'failed') {
-    await rebuildGlassesRouteFallback(refreshEpoch)
+    await rebuildGlassesRouteFallback(refreshEpoch, isCurrent)
     return
   }
 
   for (const [index, containerID] of ROUTE_CONTAINER_IDS.entries()) {
-    if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return
+    if (!isCurrent()) return
     const success = await upgradeGlassesText(
       new TextContainerUpgrade({
         containerID,
@@ -2054,13 +2237,16 @@ async function updateGlassesRouteText(message?: string): Promise<void> {
         content: rows[index],
       }),
       token,
+      isCurrent,
     )
+    if (!isCurrent()) return
     if (!success) console.error('[taiwan-bus] route row update failed:', index)
   }
 }
 
 async function showRouteDetail(arrival: Arrival): Promise<void> {
   clearEtaRefresh()
+  stopLocationTracking()
   const refreshEpoch = etaRefreshEpoch
   pageMode = 'route'
   selectedRoute = arrival
@@ -2069,7 +2255,7 @@ async function showRouteDetail(arrival: Arrival): Promise<void> {
   console.log('[taiwan-bus] open route:', arrival.routeName, arrival.goBack)
   centerRouteOnSelectedStation()
   renderPhoneRoutePage()
-  const glassesReady = createGlassesRoutePage(refreshEpoch)
+  const glassesReady = glassesRoutePageReady = createGlassesRoutePage(refreshEpoch)
   await refreshEta(glassesReady)
   if (pageMode !== 'route' || etaRefreshEpoch !== refreshEpoch) return
   startEtaRefreshTimer('route', refreshEpoch, refreshEta)
@@ -2077,7 +2263,9 @@ async function showRouteDetail(arrival: Arrival): Promise<void> {
 
 async function toggleRouteDirection(direction?: number): Promise<void> {
   if (!selectedRoute || pageMode !== 'route') return
+  if (direction === selectedDirection) return
   selectedDirection = direction ?? (selectedDirection === 0 ? 1 : 0)
+  glassesRouteImageEpoch += 1
   console.log('[taiwan-bus] route direction:', selectedRoute.routeName, selectedDirection)
   centerRouteOnSelectedStation()
   renderPhoneRoutePage()
@@ -2088,7 +2276,7 @@ async function refreshEta(
   glassesReady: Promise<void> = Promise.resolve(),
 ): Promise<void> {
   if (
-    !selectedStation ||
+    !appActive || !selectedStation ||
     (pageMode !== 'detail' && pageMode !== 'route') ||
     isRefreshingEta
   ) return
@@ -2190,6 +2378,7 @@ async function refreshEta(
 
 async function showError(message: string): Promise<void> {
   clearEtaRefresh()
+  stopLocationTracking()
   pageMode = 'error'
   const token = currentPageToken()
   renderPhoneError(message)
@@ -2210,6 +2399,7 @@ async function fetchGzipJson<T>(
   url: string,
   cache: RequestCache = 'default',
 ): Promise<T> {
+  if (!appActive) throw new DOMException('App is inactive', 'AbortError')
   const requestKey = `${cache}:${url}`
   const existing = inFlightDataRequests.get(requestKey)
   if (existing) {
@@ -2219,6 +2409,7 @@ async function fetchGzipJson<T>(
 
   const request = (async (): Promise<T> => {
     const controller = new AbortController()
+    dataRequestControllers.add(controller)
     const timeout = window.setTimeout(() => controller.abort(), 20_000)
     const startedAt = performance.now()
 
@@ -2245,6 +2436,7 @@ async function fetchGzipJson<T>(
       return payload
     } finally {
       window.clearTimeout(timeout)
+      dataRequestControllers.delete(controller)
     }
   })()
 
@@ -2258,32 +2450,28 @@ async function fetchGzipJson<T>(
   }
 }
 
-async function requestLocation(): Promise<AppLocation | null> {
-  try {
-    return await serializeBridgeCall(() => bridge.getAppLocation({
-      accuracy: AppLocationAccuracy.High,
-      timeoutMs: 8_000,
-    }))
-  } catch (error) {
-    console.warn('[taiwan-bus] location unavailable:', error)
-    return null
-  }
-}
-
 async function beginLocationTracking(): Promise<void> {
-  bridge.onAppLocationChanged((location) => {
+  if (!appActive || pageMode !== 'list' || locationTrackingRequested) return
+  locationTrackingRequested = true
+  unsubscribeLocation = bridge.onAppLocationChanged((location) => {
+    if (!appActive || !validCoordinate(location.latitude, location.longitude)) return
+    if (locationSource === 'GPS' &&
+        location.latitude === currentLocation.latitude &&
+        location.longitude === currentLocation.longitude &&
+        location.accuracy === currentLocation.accuracy) return
     currentLocation = location
     locationSource = 'GPS'
     stationDistancesDirty = true
-    if (pageMode === 'list') void showStationList()
+    if (pageMode === 'list') void showStationList(false)
   })
 
   try {
-    await serializeBridgeCall(() => bridge.startAppLocationUpdates({
+    const started = await serializeBridgeCall(() => appActive && pageMode === 'list' ? bridge.startAppLocationUpdates({
       accuracy: AppLocationAccuracy.Medium,
       intervalMs: 15_000,
       distanceFilter: 25,
-    }))
+    }) : Promise.resolve(false))
+    if (!started && appActive) console.warn('[taiwan-bus] continuous location not started')
   } catch (error) {
     console.warn('[taiwan-bus] continuous location unavailable:', error)
   }
@@ -2291,6 +2479,8 @@ async function beginLocationTracking(): Promise<void> {
 
 function emptyRoot(): void {
   appRoot.replaceChildren()
+  phoneArrivalStructure = ''
+  phoneRouteStructure = ''
 }
 
 function createHeader(
@@ -2749,37 +2939,51 @@ function renderPhoneArrivals(station: BusStation, updatedAt?: string): void {
     appRoot.append(list, footer)
   }
 
-  list.replaceChildren()
+  const structure = JSON.stringify(currentArrivals.map((arrival) => arrival.key))
+  if (phoneArrivalStructure !== structure) {
+    list.replaceChildren()
+    for (const arrival of currentArrivals) {
+      const row = document.createElement('button')
+      row.type = 'button'
+      row.className = 'arrival-row'
+      row.dataset.routeId = String(arrival.routeId)
+      row.addEventListener('click', () => {
+        const latest = currentArrivals.find((candidate) => candidate.routeId === arrival.routeId)
+        if (latest) void showRouteDetail(latest)
+      })
 
-  for (const arrival of currentArrivals) {
-    const row = document.createElement('button')
-    row.type = 'button'
-    row.className = 'arrival-row'
-    row.addEventListener('click', () => void showRouteDetail(arrival))
+      const badge = document.createElement('span')
+      badge.className = `eta-badge ${arrivalClass(arrival.estimateSeconds)}`
+      badge.textContent = arrivalStatus(arrival.estimateSeconds)
 
-    const badge = document.createElement('span')
-    badge.className = `eta-badge ${arrivalClass(arrival.estimateSeconds)}`
-    badge.textContent = arrivalStatus(arrival.estimateSeconds)
+      const route = document.createElement('span')
+      route.className = 'arrival-route'
+      route.textContent = `${arrival.routeName} - 往${arrival.destination}`
 
-    const route = document.createElement('span')
-    route.className = 'arrival-route'
-    route.textContent = `${arrival.routeName} - 往${arrival.destination}`
+      const update = document.createElement('small')
+      update.textContent = '5 秒自動更新'
 
-    const update = document.createElement('small')
-    update.textContent = '5 秒自動更新'
-
-    row.append(badge, route, update)
-    list.append(row)
+      row.append(badge, route, update)
+      list.append(row)
+    }
+    if (currentArrivals.length === 0) {
+      const state = document.createElement('section')
+      state.className = 'state-panel'
+      state.textContent = '目前沒有到站資料'
+      list.append(state)
+    }
+    phoneArrivalStructure = structure
+  }
+  for (const [index, row] of [...list.querySelectorAll<HTMLElement>('.arrival-row')].entries()) {
+    const arrival = currentArrivals[index]
+    const badge = row.querySelector<HTMLElement>('.eta-badge')!
+    const route = row.querySelector<HTMLElement>('.arrival-route')!
+    setElementClass(badge, `eta-badge ${arrivalClass(arrival.estimateSeconds)}`)
+    setElementText(badge, arrivalStatus(arrival.estimateSeconds))
+    setElementText(route, `${arrival.routeName} - 往${arrival.destination}`)
   }
 
-  if (currentArrivals.length === 0) {
-    const state = document.createElement('section')
-    state.className = 'state-panel'
-    state.textContent = '目前沒有到站資料'
-    list.append(state)
-  }
-
-  footer.textContent = `${formatDistance(station.distanceMeters)}｜資料時間 ${updatedAt ?? '剛剛'}`
+  setElementText(footer, `${formatDistance(station.distanceMeters)}｜資料時間 ${updatedAt ?? '未提供'}`)
   if (preserveScroll) requestAnimationFrame(() => window.scrollTo({ top: scrollY }))
 }
 
@@ -2822,7 +3026,15 @@ function renderPhoneRoutePage(): void {
   current?.scrollIntoView({ block: 'center' })
 }
 
-function updatePhoneRouteStops(updatedAt?: string, preserveScroll = false): void {
+function setElementText(element: HTMLElement, content: string): void {
+  if (element.textContent !== content) element.textContent = content
+}
+
+function setElementClass(element: HTMLElement, className: string): void {
+  if (element.className !== className) element.className = className
+}
+
+function updatePhoneRouteStops(updatedAt = lastDataSourceUpdateTime, preserveScroll = false): void {
   if (pageMode !== 'route') return
   const list = appRoot.querySelector<HTMLElement>('.route-stop-list')
   const footer = appRoot.querySelector<HTMLElement>('.detail-footer')
@@ -2830,44 +3042,60 @@ function updatePhoneRouteStops(updatedAt?: string, preserveScroll = false): void
   const scrollY = preserveScroll ? window.scrollY : 0
 
   const stops = currentRouteStops()
-  list.replaceChildren()
-  for (const stop of stops) {
-    const row = document.createElement('article')
-    const isCurrent = stop.stationKey === selectedStation?.id
-    const estimateSeconds = routeStopEstimate(stop)
-    row.className = `route-stop${isCurrent ? ' current' : ''}`
+  const structure = `${selectedRoute?.routeId}:${selectedDirection}:${selectedStation?.id}`
+  if (phoneRouteStructure !== structure) {
+    list.replaceChildren()
+    for (const stop of stops) {
+      const row = document.createElement('article')
+      const isCurrent = stop.stationKey === selectedStation?.id
+      const estimateSeconds = routeStopEstimate(stop)
+      row.className = `route-stop${isCurrent ? ' current' : ''}`
 
-    const badge = document.createElement('span')
-    badge.className = `route-eta ${arrivalClass(estimateSeconds)}`
-    badge.textContent = arrivalStatus(estimateSeconds)
+      const badge = document.createElement('span')
+      badge.className = `route-eta ${arrivalClass(estimateSeconds)}`
+      badge.textContent = arrivalStatus(estimateSeconds)
 
-    const name = document.createElement('span')
-    name.className = 'route-stop-name'
-    name.textContent = stop.name
+      const name = document.createElement('span')
+      name.className = 'route-stop-name'
+      name.textContent = stop.name
 
-    const plates = document.createElement('span')
-    plates.className = 'route-bus-plates'
-    for (const plate of routeStopBusPlates(stop)) {
-      const label = document.createElement('span')
-      label.className = 'route-bus-plate'
-      label.textContent = plate
-      plates.append(label)
+      const plates = document.createElement('span')
+      plates.className = 'route-bus-plates'
+
+      const dot = document.createElement('span')
+      dot.className = 'timeline-dot'
+      dot.setAttribute('aria-hidden', 'true')
+      row.append(badge, name, plates, dot)
+      list.append(row)
     }
-
-    const dot = document.createElement('span')
-    dot.className = 'timeline-dot'
-    dot.setAttribute('aria-hidden', 'true')
-    row.append(badge, name, plates, dot)
-    list.append(row)
+    if (stops.length === 0) {
+      const state = document.createElement('section')
+      state.className = 'state-panel'
+      state.textContent = '此方向沒有站序資料'
+      list.append(state)
+    }
+    phoneRouteStructure = structure
   }
-
-  if (stops.length === 0) {
-    const state = document.createElement('section')
-    state.className = 'state-panel'
-    state.textContent = '此方向沒有站序資料'
-    list.append(state)
+  for (const [index, row] of [...list.querySelectorAll<HTMLElement>('.route-stop')].entries()) {
+    const stop = stops[index]
+    const estimateSeconds = routeStopEstimate(stop)
+    const badge = row.querySelector<HTMLElement>('.route-eta')!
+    const plates = row.querySelector<HTMLElement>('.route-bus-plates')!
+    setElementClass(badge, `route-eta ${arrivalClass(estimateSeconds)}`)
+    setElementText(badge, arrivalStatus(estimateSeconds))
+    const plateValues = routeStopBusPlates(stop)
+    const plateKey = JSON.stringify(plateValues)
+    if (plates.dataset.plates !== plateKey) {
+      plates.replaceChildren(...plateValues.map((plate) => {
+        const label = document.createElement('span')
+        label.className = 'route-bus-plate'
+        label.textContent = plate
+        return label
+      }))
+      plates.dataset.plates = plateKey
+    }
   }
-  footer.textContent = `往${directionDestination()}｜資料時間 ${updatedAt ?? '剛剛'}`
+  setElementText(footer, `往${directionDestination()}｜資料時間 ${updatedAt ?? '未提供'}`)
   if (preserveScroll) requestAnimationFrame(() => window.scrollTo({ top: scrollY }))
 }
 
@@ -2894,20 +3122,22 @@ function renderPhoneError(message: string): void {
 }
 
 async function loadBusData(): Promise<void> {
-  if (isLoading) return
+  if (!appActive || isLoading) return
   isLoading = true
+  stopLocationTracking()
+  const loadEpoch = etaRefreshEpoch
   pageMode = 'loading'
   renderPhoneLoading()
 
   try {
     const favoritesPromise = loadFavoriteSettings()
-    const locationPromise = requestLocation()
     const [stopsResult, routesResult] = await Promise.allSettled([
       fetchGzipJson<TaipeiBusPayload<RawStop>>(STOP_DATA_URL),
       fetchGzipJson<TaipeiBusPayload<RawRoute>>(ROUTE_DATA_URL),
     ])
 
     if (stopsResult.status === 'rejected') throw stopsResult.reason
+    if (!appActive || etaRefreshEpoch !== loadEpoch) return
 
     stations = groupStops(stopsResult.value.BusInfo)
     stationDistancesDirty = true
@@ -2959,22 +3189,14 @@ async function loadBusData(): Promise<void> {
     }
 
     await favoritesPromise
+    if (!appActive || etaRefreshEpoch !== loadEpoch) return
     currentLocation = DEFAULT_LOCATION
     locationSource = '預設台北'
-    sortStationsByDistance()
     await showHome()
 
-    const location = await locationPromise
-    if (location) {
-      currentLocation = location
-      locationSource = 'GPS'
-      stationDistancesDirty = true
-      if ((pageMode as PageMode) === 'list') await showStationList()
-    }
-
-    await beginLocationTracking()
     console.log(`[taiwan-bus] ready with ${stations.length} grouped stations`)
   } catch (error) {
+    if (!appActive || etaRefreshEpoch !== loadEpoch) return
     console.error(
       '[taiwan-bus] data load failed:',
       error instanceof Error ? `${error.name}: ${error.message}` : error,
@@ -2982,6 +3204,7 @@ async function loadBusData(): Promise<void> {
     await showError('站牌資料載入失敗，請確認手機網路。')
   } finally {
     isLoading = false
+    if (appActive && pageMode === 'loading' && etaRefreshEpoch !== loadEpoch) void loadBusData()
   }
 }
 
