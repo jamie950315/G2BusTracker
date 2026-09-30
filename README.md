@@ -145,6 +145,15 @@ node server/server.mjs
 
 ## 驗證狀態
 
+`0.10.12` 已於 2026-09-30（Asia/Taipei）完成建置、打包並上傳 Even Hub，重新載入 Builds 清單確認為 **Private**。公開版本仍為 `0.10.11`。
+
+- 審查後程式通過 45 項測試，以及官方 Simulator `0.8.0` 的首頁、常用路線、附近站牌、到站資訊、路線方向切換、捲動與返回操作，console 無錯誤。瀏覽器與模擬 Host 檢查確認未變動資料會重用列表 DOM，GPS 呼叫限定在附近站牌頁。
+- 最終 production build、版本一致性檢查及 CLI `0.1.13` 打包通過；使用 SDK `0.0.12`、Node `23.11.0`。打包輸入僅包含 manifest、HTML、JavaScript 與內附字型；版本資料更新不影響已驗證的 client bundle。
+- 套件：`taiwan-bus-g2-v0.10.12.ehpk`，**1,074,480 bytes**；SHA-256：`a36f60e60749037d67d1ee65842c558c01e8aeb04909858c0a574447abaeb847`。
+- 尚未驗證實體裝置安裝、Host／firmware 版本、BLE 可靠性及耗電／溫度；server 修正尚未部署。
+
+### 歷史驗證
+
 `0.10.11` 已使用官方 Simulator `0.8.0` 與正式即時 API 驗證 150 公尺條件式合併、附近站牌及站牌詳情的每路線單列顯示：
 
 - 「天母棒球場(忠誠)」與「天母棒球場(士東)」在附近清單中各只顯示一次；同一站牌內相同 Route ID 也只顯示一次。
