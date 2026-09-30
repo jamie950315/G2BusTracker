@@ -145,12 +145,13 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
-Version `0.10.12` was built and packaged on 2026-09-30 (Asia/Taipei), then uploaded to Even Hub as a **Private** build. The Builds list was independently reloaded to confirm the version and visibility; the public build remains `0.10.11`.
+Version `0.10.12` was built, packaged, and uploaded to Even Hub on 2026-09-30 (Asia/Taipei), then submitted for public release at 20:29. An independent portal reload confirmed **In review** and a **Submitted** record. Publication requires Even Realities approval; the public build remains `0.10.11` while review is pending.
 
 - The reviewed code passed 45 tests and an official Simulator `0.8.0` flow covering home, favorites, nearby stops, arrivals, route direction changes, scrolling, and back navigation, with no console errors. Browser and mocked Host checks confirmed unchanged arrivals and route rows are reused, with GPS calls limited to the nearby page.
 - The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.12` and Node `23.11.0`. Packaging inputs contained only the manifest, HTML, JavaScript, and bundled font. Version metadata updates do not change the validated client bundle.
 - Artifact: `taiwan-bus-g2-v0.10.12.ehpk`, **1,074,480 bytes**; SHA-256: `a36f60e60749037d67d1ee65842c558c01e8aeb04909858c0a574447abaeb847`.
 - Physical-device installation, Host/firmware versions, BLE reliability, and power/temperature measurements remain unverified. The server changes have not been deployed.
+- The current [submission guidelines](https://hub.evenrealities.com/docs/ship/app-submission) list an SDK floor of `0.0.14`; this submitted build declares `0.0.12`. Portal submission succeeded, but approval is unconfirmed.
 
 ### Historical validation
 

@@ -15,6 +15,7 @@
 - Uses the Greater Taipei public bus feeds. Default location is Taipei Main Station until phone GPS is available; location stays local to distance calculations. Continuous medium-accuracy GPS runs only on the nearby list and stops when leaving it. There is no startup high-accuracy location request.
 - Refreshes ETAs/vehicles every five seconds. Keep source update time distinct from receipt time; do not fabricate arrivals or plates.
 - SDK is pinned to `0.0.12`, CLI `0.1.13`, Simulator `0.8.0`. Read installed README/types before relying on SDK behavior. App manifest requires Even App `2.0.0` and location/network permissions.
+- Current [submission guidance](https://hub.evenrealities.com/docs/ship/app-submission) lists SDK floor `0.0.14`; the submitted `0.10.12` manifest declares `0.0.12`. The portal accepted submission, but review acceptance remains unconfirmed. Check reviewer notes before preparing another build.
 
 ## Code map
 
@@ -66,4 +67,4 @@ rtk npm run pack
 - Client targets `https://taiwan-bus.0ruka.dev/blobbus/{GetStop,GetRoute,GetEstimateTime,GetBusData}.gz`.
 - Repository docs describe the proxy on Raspberry Pi 5. Checked-in service uses `/opt/taiwan-bus-g2-proxy`, loopback port 8893 and user/group `jamie`. This is documented configuration, not a fresh remote inspection.
 - Static feed cache TTL is five minutes; dynamic TTL is two seconds with bounded stale allowance. Preserve the no-credentials-in-client design.
-- The September 2026 local review includes tests, browser DOM/Bridge mocks and official Simulator interaction checks. It does not establish physical GPS/lifecycle/BLE behavior or measured power/temperature reduction. Version `0.10.12` was uploaded to Even Hub as a Private build on 2026-09-30 (Asia/Taipei), confirmed by independently reloading the Builds list. Public version remains `0.10.11`; the proxy was not deployed and no remote service changes were performed.
+- The September 2026 local review includes tests, browser DOM/Bridge mocks and official Simulator interaction checks. It does not establish physical GPS/lifecycle/BLE behavior or measured power/temperature reduction. Version `0.10.12` was uploaded and submitted for public release on 2026-09-30 at 20:29 (Asia/Taipei). Independently reloading Even Hub confirmed **In review**, with **Submitted** recorded; public version remains `0.10.11` pending approval. The proxy was not deployed and no remote service changes were performed.
