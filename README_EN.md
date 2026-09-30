@@ -4,7 +4,7 @@ English | [繁體中文](README.md)
 
 A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
 
-Current version: `0.10.11`
+Current version: `0.10.12`
 
 ## Features
 
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-Output: `taiwan-bus-g2-v0.10.11.ehpk`
+Output: `taiwan-bus-g2-v0.10.12.ehpk`
 
 You can inspect the final `dist` build first:
 

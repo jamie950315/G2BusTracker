@@ -10,7 +10,7 @@
 
 ## Product and current state
 
-- App version `0.10.11`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
+- App version `0.10.12`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
 - Phone and G2 offer home, favorites, nearby stops, stop arrivals, and route detail. Phone manages favorite groups and routes; G2 is read-only.
 - Uses the Greater Taipei public bus feeds. Default location is Taipei Main Station until phone GPS is available; location stays local to distance calculations. Continuous medium-accuracy GPS runs only on the nearby list and stops when leaving it. There is no startup high-accuracy location request.
 - Refreshes ETAs/vehicles every five seconds. Keep source update time distinct from receipt time; do not fabricate arrivals or plates.

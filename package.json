@@ -1,7 +1,7 @@
 {
   "name": "taiwan-bus-even-g2",
   "private": true,
-  "version": "0.10.11",
+  "version": "0.10.12",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -10,7 +10,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "simulate": "evenhub-simulator http://localhost:5173",
     "simulate:automation": "evenhub-simulator http://localhost:5173 --automation-port 9898",
-    "pack": "evenhub pack app.json dist --output taiwan-bus-g2-v0.10.11.ehpk"
+    "pack": "evenhub pack app.json dist --output taiwan-bus-g2-v0.10.12.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "0.0.12",

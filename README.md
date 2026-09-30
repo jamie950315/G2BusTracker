@@ -4,7 +4,7 @@
 
 專為 Even Realities G2 與 Even Hub 打造的台灣公車即時查詢 App。目前以大台北公車資料為主，提供附近站牌、即時到站、完整路線站序、車輛位置／車牌，以及可自訂分組的常用路線。
 
-目前版本：`0.10.11`
+目前版本：`0.10.12`
 
 ## 功能特色
 
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-輸出檔案：`taiwan-bus-g2-v0.10.11.ehpk`
+輸出檔案：`taiwan-bus-g2-v0.10.12.ehpk`
 
 可先使用 production preview 檢查最終 `dist`：
 
