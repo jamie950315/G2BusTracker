@@ -4,7 +4,7 @@ English | [繁體中文](README.md)
 
 A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
 
-Current version: `0.10.12`
+Current version: `0.10.13`
 
 ## Features
 
@@ -48,7 +48,7 @@ Phone location is used locally only to calculate distance and sort nearby stops.
 - Node.js `>=22.12.0` (including TypeScript type stripping for tests)
 - npm
 - Even Realities App / Even Hub Host `2.0.0` or later
-- Even Hub SDK `0.0.12`
+- Even Hub SDK `0.0.14` (Even App `2.2.9` or newer)
 - Official Even Hub Simulator `0.8.0` (optional)
 
 ## Quick start
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-Output: `taiwan-bus-g2-v0.10.12.ehpk`
+Output: `taiwan-bus-g2-v0.10.13.ehpk`
 
 You can inspect the final `dist` build first:
 
@@ -145,15 +145,17 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
-Version `0.10.12` was built, packaged, and uploaded to Even Hub on 2026-09-30 (Asia/Taipei), then submitted for public release at 20:29. An independent portal reload confirmed **In review** and a **Submitted** record. Publication requires Even Realities approval; the public build remains `0.10.11` while review is pending.
+Version `0.10.13` was built and packaged on 2026-10-03 (Asia/Taipei). It handles foreground events from system, text and list envelopes, restores native input capture on foreground return, and accepts system taps without a touch source. Native menu selection stays aligned with accepted page rebuilds. The public build remains `0.10.11` pending a new review.
 
-- The reviewed code passed 45 tests and an official Simulator `0.8.0` flow covering home, favorites, nearby stops, arrivals, route direction changes, scrolling, and back navigation, with no console errors. Browser and mocked Host checks confirmed unchanged arrivals and route rows are reused, with GPS calls limited to the nearby page.
-- The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.12` and Node `23.11.0`. Packaging inputs contained only the manifest, HTML, JavaScript, and bundled font. Version metadata updates do not change the validated client bundle.
-- Artifact: `taiwan-bus-g2-v0.10.12.ehpk`, **1,074,480 bytes**; SHA-256: `a36f60e60749037d67d1ee65842c558c01e8aeb04909858c0a574447abaeb847`.
+- All 48 tests passed, including controlled Host regressions for cancelled-dialog recovery, repeated double taps, confirmed exit, and native list selection.
+- The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.14` and Node `23.11.0`. The manifest requires Even App `2.2.9` or newer. Packaging inputs contain only the manifest, HTML, JavaScript, and bundled font.
+- Official Simulator `0.8.0` exercised 12 inputs through home, nearby stops, arrivals, route direction changes, favorites, back navigation, and system exit, with no console errors. Its exit implementation clears the framebuffer without a Yes/No dialog, so the actual cancellation sequence remains unverified on G2 hardware.
+- Artifact: `taiwan-bus-g2-v0.10.13.ehpk`, **1,082,405 bytes**; SHA-256: `0043a165cd9b701c514304d79c1937e3010fc373f981a68efd0e71a5bcf6173d`.
 - Physical-device installation, Host/firmware versions, BLE reliability, and power/temperature measurements remain unverified. The server changes have not been deployed.
-- The current [submission guidelines](https://hub.evenrealities.com/docs/ship/app-submission) list an SDK floor of `0.0.14`; this submitted build declares `0.0.12`. Portal submission succeeded, but approval is unconfirmed.
 
 ### Historical validation
+
+Version `0.10.12` passed 45 tests and Simulator checks before submission on 2026-09-30. Even Hub rejected it on 2026-10-03 at 20:31 (Asia/Taipei) because taps stopped working after cancelling the system exit dialog. Its SDK was `0.0.12`; version `0.10.13` updates it to the current submission floor of `0.0.14`.
 
 Version `0.10.11` was operated in the official Simulator `0.8.0` against the production real-time API. The exercised flow covered conditional merging through 150 meters, nearby stops, and one-row-per-route stop details:
 

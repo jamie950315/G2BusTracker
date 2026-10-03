@@ -4,7 +4,7 @@
 
 專為 Even Realities G2 與 Even Hub 打造的台灣公車即時查詢 App。目前以大台北公車資料為主，提供附近站牌、即時到站、完整路線站序、車輛位置／車牌，以及可自訂分組的常用路線。
 
-目前版本：`0.10.12`
+目前版本：`0.10.13`
 
 ## 功能特色
 
@@ -48,7 +48,7 @@ App 透過 `https://taiwan-bus.0ruka.dev` 連線至部署於 Raspberry Pi 5 的�
 - Node.js `>=22.12.0`（包含測試所需的 TypeScript type stripping）
 - npm
 - Even Realities App／Even Hub Host `2.0.0` 以上
-- Even Hub SDK `0.0.12`
+- Even Hub SDK `0.0.14`（Even App `2.2.9` 以上）
 - 官方 Even Hub Simulator `0.8.0`（選用）
 
 ## 快速開始
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-輸出檔案：`taiwan-bus-g2-v0.10.12.ehpk`
+輸出檔案：`taiwan-bus-g2-v0.10.13.ehpk`
 
 可先使用 production preview 檢查最終 `dist`：
 
@@ -145,15 +145,17 @@ node server/server.mjs
 
 ## 驗證狀態
 
-`0.10.12` 已於 2026-09-30（Asia/Taipei）完成建置、打包並上傳 Even Hub，於 20:29 提交公開發布。獨立重新載入 portal 後確認為 **In review**，並有 **Submitted** 紀錄。公開上架須經 Even Realities 審核核准；等待期間公開版本仍為 `0.10.11`。
+`0.10.13` 已於 2026-10-03（Asia/Taipei）完成建置與打包。修正包含 system、text 與 list 的前景事件處理，返回前景時恢復原生輸入捕捉，接受未帶觸控來源的系統點按，並讓列表選取與已接受的頁面重建一致。公開版本仍為 `0.10.11`，等待新版本審核。
 
-- 審查後程式通過 45 項測試，以及官方 Simulator `0.8.0` 的首頁、常用路線、附近站牌、到站資訊、路線方向切換、捲動與返回操作，console 無錯誤。瀏覽器與模擬 Host 檢查確認未變動資料會重用列表 DOM，GPS 呼叫限定在附近站牌頁。
-- 最終 production build、版本一致性檢查及 CLI `0.1.13` 打包通過；使用 SDK `0.0.12`、Node `23.11.0`。打包輸入僅包含 manifest、HTML、JavaScript 與內附字型；版本資料更新不影響已驗證的 client bundle。
-- 套件：`taiwan-bus-g2-v0.10.12.ehpk`，**1,074,480 bytes**；SHA-256：`a36f60e60749037d67d1ee65842c558c01e8aeb04909858c0a574447abaeb847`。
+- 48 項測試全部通過，包含受控 Host 的取消退出恢復、再次雙擊、確認退出及原生列表選取回歸檢查。
+- 最終 production build、版本一致性檢查及 CLI `0.1.13` 打包通過；使用 SDK `0.0.14`、Node `23.11.0`。Manifest 要求 Even App `2.2.9` 以上；打包輸入僅包含 manifest、HTML、JavaScript 與內附字型。
+- 官方 Simulator `0.8.0` 完成 12 次輸入，涵蓋首頁、附近站牌、到站資訊、路線方向切換、常用路線、返回及系統退出，console 無錯誤。其退出實作會直接清空畫面，沒有「是／否」對話框；實際取消流程仍未經 G2 實機驗證。
+- 套件：`taiwan-bus-g2-v0.10.13.ehpk`，**1,082,405 bytes**；SHA-256：`0043a165cd9b701c514304d79c1937e3010fc373f981a68efd0e71a5bcf6173d`。
 - 尚未驗證實體裝置安裝、Host／firmware 版本、BLE 可靠性及耗電／溫度；server 修正尚未部署。
-- 目前[官方提交規範](https://hub.evenrealities.com/docs/ship/app-submission)列出的 SDK 最低版本為 `0.0.14`，此提交版本宣告為 `0.0.12`。Portal 已接受提交，是否核准仍待審核。
 
 ### 歷史驗證
+
+`0.10.12` 通過 45 項測試與 Simulator 檢查，於 2026-09-30 送審；Even Hub 在 2026-10-03 20:31（Asia/Taipei）因取消系統退出對話框後點按失效而拒絕。其 SDK 為 `0.0.12`；`0.10.13` 已升級至目前提交門檻 `0.0.14`。
 
 `0.10.11` 已使用官方 Simulator `0.8.0` 與正式即時 API 驗證 150 公尺條件式合併、附近站牌及站牌詳情的每路線單列顯示：
 

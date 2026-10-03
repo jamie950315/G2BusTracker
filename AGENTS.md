@@ -10,12 +10,11 @@
 
 ## Product and current state
 
-- App version `0.10.12`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
+- App version `0.10.13`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
 - Phone and G2 offer home, favorites, nearby stops, stop arrivals, and route detail. Phone manages favorite groups and routes; G2 is read-only.
 - Uses the Greater Taipei public bus feeds. Default location is Taipei Main Station until phone GPS is available; location stays local to distance calculations. Continuous medium-accuracy GPS runs only on the nearby list and stops when leaving it. There is no startup high-accuracy location request.
 - Refreshes ETAs/vehicles every five seconds. Keep source update time distinct from receipt time; do not fabricate arrivals or plates.
-- SDK is pinned to `0.0.12`, CLI `0.1.13`, Simulator `0.8.0`. Read installed README/types before relying on SDK behavior. App manifest requires Even App `2.0.0` and location/network permissions.
-- Current [submission guidance](https://hub.evenrealities.com/docs/ship/app-submission) lists SDK floor `0.0.14`; the submitted `0.10.12` manifest declares `0.0.12`. The portal accepted submission, but review acceptance remains unconfirmed. Check reviewer notes before preparing another build.
+- SDK is pinned to `0.0.14`, CLI `0.1.13`, Simulator `0.8.0`. Read installed README/types before relying on SDK behavior. App manifest requires Even App `2.2.9` and location/network permissions. CLI `0.1.13` does not derive the Host floor; keep the manifest aligned with the installed SDK's `minAppVersion`.
 
 ## Code map
 
@@ -36,7 +35,8 @@
 - All native calls pass through `serializeBridgeCall`; image work additionally has its own queue. Render phone state without awaiting glasses transfers.
 - Route content updates wait for initial page creation and run serially. Superseded direction work is discarded at actual Bridge dispatch; an accepted fallback rebuild synchronizes the layout before the next content update.
 - Phone arrivals and route stops retain DOM rows across refreshes; update only changed text, classes and plates. Empty favorite groups do not download ETA. Favorite gestures resolve against the last successfully presented entries and selection.
-- Host foreground exit pauses refreshes, aborts downloads and stops GPS; foreground entry restores the current page. System/abnormal exit and non-persisted `pagehide` also remove the Hub subscription. Persisted `pagehide`/`pageshow` pause/resume for BFCache. Do not pause solely on phone document visibility, since G2 can remain in use.
+- Host lifecycle events are accepted from system, text and list envelopes. Foreground exit pauses refreshes, aborts downloads and stops GPS; foreground entry restores the native page and input capture even if the app already considers itself active (such as after cancelling the system exit dialog). System/abnormal exit and non-persisted `pagehide` also remove the Hub subscription. Persisted `pagehide`/`pageshow` pause/resume for BFCache. Do not pause solely on phone document visibility, since G2 can remain in use.
+- System taps may omit their source or use the SDK's dummy source; require an explicit tap type in that case. Home/nearby clicks use the last reported native list selection; accepted native list rebuilds reset it to the first row, matching the OS focus.
 - Page tokens use `pageMode` plus `etaRefreshEpoch`; direction-image work additionally uses `glassesRouteImageEpoch` and selected direction. Check staleness after asynchronous work and at actual dispatch.
 - Exactly one event-capture container per G2 page. Canvas is 576 × 288.
 - Route detail: six native text containers (header, timestamp, four bordered stop rows) plus two 288 × 42 direction images. The table rows themselves are not images.
@@ -67,4 +67,4 @@ rtk npm run pack
 - Client targets `https://taiwan-bus.0ruka.dev/blobbus/{GetStop,GetRoute,GetEstimateTime,GetBusData}.gz`.
 - Repository docs describe the proxy on Raspberry Pi 5. Checked-in service uses `/opt/taiwan-bus-g2-proxy`, loopback port 8893 and user/group `jamie`. This is documented configuration, not a fresh remote inspection.
 - Static feed cache TTL is five minutes; dynamic TTL is two seconds with bounded stale allowance. Preserve the no-credentials-in-client design.
-- The September 2026 local review includes tests, browser DOM/Bridge mocks and official Simulator interaction checks. It does not establish physical GPS/lifecycle/BLE behavior or measured power/temperature reduction. Version `0.10.12` was uploaded and submitted for public release on 2026-09-30 at 20:29 (Asia/Taipei). Independently reloading Even Hub confirmed **In review**, with **Submitted** recorded; public version remains `0.10.11` pending approval. The proxy was not deployed and no remote service changes were performed.
+- Version `0.10.12` was rejected on 2026-10-03 at 20:31 (Asia/Taipei) for input loss after cancelling the system exit dialog. Version `0.10.13` passes 48 tests, the production build, packaging, and a 12-input official Simulator flow. Cancellation recovery is covered by controlled Host tests; Simulator `0.8.0` clears the framebuffer on exit and cannot exercise No. Physical GPS/lifecycle/BLE behavior and power/temperature reduction remain unverified. Public version is still `0.10.11`. The proxy has not been deployed.

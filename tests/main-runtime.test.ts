@@ -6,6 +6,8 @@ import ts from 'typescript'
 import { PresentedText } from '../src/presented-text.ts'
 import { PresentedList } from '../src/presented-list.ts'
 import { parseEstimateSeconds } from '../src/arrivals.ts'
+import { EventSourceType, OsEventTypeList, RebuildPageContainer, TextContainerProperty,
+  ListContainerProperty, ListItemContainerProperty } from '@evenrealities/even_hub_sdk'
 
 // Run the production functions with a controllable Host, without starting main.ts.
 const source = ts.createSourceFile('main.ts', readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8'),
@@ -207,6 +209,121 @@ test('suspending cancels refresh, requests and location, and resuming restores t
   assert.equal(ctx.appActive, false)
   assert.equal(hubRemoved, 1)
   assert.equal(resumed, 1)
+})
+
+function inputRuntime() {
+  const calls = { home: 0, favorites: 0, nearby: 0, shutdown: 0, removed: 0, station: null as unknown }
+  const ctx = runtime(['handleHubEvent', 'resumeApp', 'suspendApp', 'disposeApp',
+    'clearEtaRefresh', 'stopLocationTracking', 'serializeBridgeCall', 'shutDownGlassesPage'], {
+    appActive: true, appDisposed: false, pageMode: 'home', isLoading: false,
+    etaRefreshEpoch: 1, etaRefreshTimer: null, isRefreshingEta: false, glassesRouteImageEpoch: 0,
+    dataRequestControllers: new Set(), unsubscribeLocation: null, locationTrackingRequested: false,
+    window: { clearInterval: () => {} }, bridgeCallQueue: Promise.resolve(),
+    EventSourceType, OsEventTypeList, HOME_LIST_CONTAINER_ID: 11, LIST_CONTAINER_ID: 2,
+    FAVORITES_CONTAINER_ID: 12, ETA_CONTAINER_IDS: [3, 6, 7, 8],
+    ROUTE_DIRECTION_CONTAINER_ID: 4, ROUTE_CONTAINER_IDS: [6, 7, 8, 9],
+    presentedArrivals: new PresentedList(), selectedArrivalIndex: 0,
+    selectedHomeIndex: 0, selectedStationIndex: 0,
+    presentedStations: new PresentedList([{ id: 'first' }, { id: 'second' }]),
+    showHome: async () => { calls.home += 1 },
+    showFavorites: async () => { calls.favorites += 1 },
+    showStationList: async () => { calls.nearby += 1 },
+    showStationDetail: async (station: unknown) => { calls.station = station },
+    beginLocationTracking: async () => {},
+    bridge: { shutDownPageContainer: async (mode: number) => {
+      assert.equal(mode, 1)
+      calls.shutdown += 1
+      return true
+    } },
+    unsubscribeHub: () => { calls.removed += 1 },
+  })
+  return { ctx, calls }
+}
+
+const flushEvents = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+test('cancelled exit restores input for text, list and system foreground events', async () => {
+  for (const envelope of ['textEvent', 'listEvent', 'sysEvent']) {
+    const { ctx, calls } = inputRuntime()
+    ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
+    await flushEvents()
+    assert.equal(calls.shutdown, 1)
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } })
+    assert.equal(ctx.appActive, false, `${envelope} must suspend`)
+    ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.CLICK_EVENT } })
+    assert.equal(calls.favorites, 0)
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    await flushEvents()
+    assert.equal(ctx.appActive, true)
+    assert.equal(calls.home, 1)
+    ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.CLICK_EVENT } })
+    assert.equal(calls.favorites, 1)
+    ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
+    await flushEvents()
+    assert.equal(calls.shutdown, 2)
+    // A cancelled dialog can return foreground without a preceding background event.
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    await flushEvents()
+    assert.equal(calls.home, 2, 'foreground return must restore native event capture even while active')
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.SYSTEM_EXIT_EVENT } })
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    await flushEvents()
+    assert.equal(ctx.appDisposed, true)
+    assert.equal(calls.removed, 1)
+    assert.equal(calls.home, 2, 'a confirmed exit must stay disposed')
+  }
+})
+
+test('system taps without a touch source use the native list selection after a dialog', async () => {
+  for (const eventSource of [undefined, EventSourceType.TOUCH_EVENT_FORM_DUMMY_NULL]) {
+    const { ctx, calls } = inputRuntime()
+    ctx.handleHubEvent({ listEvent: { containerID: 11, currentSelectItemIndex: 1,
+      eventType: OsEventTypeList.SCROLL_BOTTOM_EVENT } })
+    ctx.handleHubEvent({ sysEvent: { eventType: OsEventTypeList.CLICK_EVENT, eventSource } })
+    assert.equal(calls.nearby, 1)
+    ctx.handleHubEvent({ sysEvent: { eventType: OsEventTypeList.DOUBLE_CLICK_EVENT, eventSource } })
+    await flushEvents()
+    assert.equal(calls.shutdown, 1)
+    ctx.pageMode = 'list'
+    ctx.handleHubEvent({ listEvent: { containerID: 2, currentSelectItemIndex: 1,
+      eventType: OsEventTypeList.SCROLL_BOTTOM_EVENT } })
+    ctx.handleHubEvent({ sysEvent: { eventType: OsEventTypeList.CLICK_EVENT, eventSource } })
+    assert.equal((calls.station as { id: string }).id, 'second')
+    ctx.handleHubEvent({ sysEvent: {} })
+    ctx.handleHubEvent({ sysEvent: { eventType: OsEventTypeList.IMU_DATA_REPORT } })
+    assert.equal(calls.nearby, 1, 'empty and non-touch system events must not be treated as taps')
+  }
+})
+
+test('accepted native menu rebuilds reset the remembered selection to match OS focus', async () => {
+  let accepted = false
+  const ctx = runtime(['showHome', 'showStationList', 'clearEtaRefresh',
+    'currentPageToken', 'isPageTokenCurrent'], {
+    appActive: true, pageMode: 'home', etaRefreshEpoch: 1, etaRefreshTimer: null,
+    isRefreshingEta: false, selectedHomeIndex: 1, selectedStationIndex: 1,
+    stationListRenderEpoch: 0, selectedStation: null, selectedRoute: null,
+    currentArrivals: [], presentedArrivals: new PresentedList(), presentedStations: new PresentedList(),
+    visibleStations: [{ id: 'first' }, { id: 'second' }], locationSource: 'default',
+    window: { clearInterval: () => {} }, stopLocationTracking: () => {},
+    renderPhoneHome: () => {}, renderPhoneStationList: () => {}, sortStationsByDistance: () => {},
+    stationListLabel: (station: { id: string }) => station.id,
+    glassesFavoritesUpdatePromise: null, glassesImageUpdateQueue: Promise.resolve(),
+    HOME_LIST_CONTAINER_ID: 11, LIST_CONTAINER_ID: 2,
+    RebuildPageContainer, TextContainerProperty, ListContainerProperty, ListItemContainerProperty,
+    rebuildGlassesPage: async () => accepted,
+    console: { error: () => {} },
+  })
+  await ctx.showHome()
+  assert.equal(ctx.selectedHomeIndex, 1, 'a rejected frame keeps the presented selection')
+  accepted = true
+  await ctx.showHome()
+  assert.equal(ctx.selectedHomeIndex, 0)
+  accepted = false
+  await ctx.showStationList(false)
+  assert.equal(ctx.selectedStationIndex, 1)
+  accepted = true
+  await ctx.showStationList(false)
+  assert.equal(ctx.selectedStationIndex, 0)
 })
 
 test('favorites ignore invalid ETA candidates and route stops do not fabricate arrivals', () => {

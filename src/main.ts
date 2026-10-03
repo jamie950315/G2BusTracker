@@ -12,6 +12,7 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
   waitForEvenAppBridge,
+  type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk'
 import { ungzip } from 'pako'
 import notoSansTcUrl from '@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-traditional-600-normal.woff2?url'
@@ -280,6 +281,8 @@ let stations: BusStation[] = []
 let stationById = new Map<string, BusStation>()
 let visibleStations: BusStation[] = []
 const presentedStations = new PresentedList<BusStation>()
+let selectedHomeIndex = 0
+let selectedStationIndex = 0
 let stationDistancesDirty = true
 let routeInfo = new Map<number, RouteInfo>()
 let routeStopsByDirection = new Map<string, RouteStop[]>()
@@ -375,10 +378,18 @@ if (startupResult !== 0) {
 
 renderPhoneLoading()
 
-const unsubscribeHub = bridge.onEvenHubEvent((event) => {
-  const lifecycleEvent = event.sysEvent?.eventType
+const unsubscribeHub = bridge.onEvenHubEvent(handleHubEvent)
+
+function handleHubEvent(event: EvenHubEvent): void {
+  const lifecycleEvent = [event.sysEvent?.eventType, event.textEvent?.eventType,
+    event.listEvent?.eventType].find((type) =>
+    type === OsEventTypeList.FOREGROUND_ENTER_EVENT ||
+    type === OsEventTypeList.FOREGROUND_EXIT_EVENT ||
+    type === OsEventTypeList.SYSTEM_EXIT_EVENT ||
+    type === OsEventTypeList.ABNORMAL_EXIT_EVENT)
   if (lifecycleEvent === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
-    void resumeApp()
+    // Returning from the system dialog must also restore native event capture.
+    void resumeApp(true)
     return
   }
   if (lifecycleEvent === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
@@ -394,6 +405,10 @@ const unsubscribeHub = bridge.onEvenHubEvent((event) => {
   const listEvent = event.listEvent
 
   if (listEvent?.containerID === HOME_LIST_CONTAINER_ID && pageMode === 'home') {
+    const index = listEvent.currentSelectItemIndex
+    if (index !== undefined && Number.isInteger(index) && index >= 0 && index < 2) {
+      selectedHomeIndex = index
+    }
     if (listEvent.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
       void shutDownGlassesPage(1)
       return
@@ -402,14 +417,15 @@ const unsubscribeHub = bridge.onEvenHubEvent((event) => {
       listEvent.eventType === OsEventTypeList.CLICK_EVENT ||
       listEvent.eventType === undefined
     ) {
-      const index = listEvent.currentSelectItemIndex ?? 0
-      if (index === 0) void showFavorites()
-      else if (index === 1) void showStationList()
+      if (selectedHomeIndex === 0) void showFavorites()
+      else void showStationList()
     }
     return
   }
 
   if (listEvent?.containerID === LIST_CONTAINER_ID && pageMode === 'list') {
+    const index = listEvent.currentSelectItemIndex
+    if (index !== undefined && presentedStations.at(index)) selectedStationIndex = index
     if (listEvent.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
       void showHome()
       return
@@ -419,19 +435,19 @@ const unsubscribeHub = bridge.onEvenHubEvent((event) => {
       listEvent.eventType === OsEventTypeList.CLICK_EVENT ||
       listEvent.eventType === undefined
     ) {
-      const index = listEvent.currentSelectItemIndex ?? 0
-      const station = presentedStations.at(index)
+      const station = presentedStations.at(selectedStationIndex)
       if (station) void showStationDetail(station)
     }
     return
   }
 
   const sysEvent = event.sysEvent
-  const isTouchSource = sysEvent?.eventSource !== undefined && [
+  const isTouchSource = sysEvent && (sysEvent.eventSource === undefined || [
+    EventSourceType.TOUCH_EVENT_FORM_DUMMY_NULL,
     EventSourceType.TOUCH_EVENT_FROM_GLASSES_R,
     EventSourceType.TOUCH_EVENT_FROM_RING,
     EventSourceType.TOUCH_EVENT_FROM_GLASSES_L,
-  ].includes(sysEvent.eventSource)
+  ].includes(sysEvent.eventSource))
 
   if (sysEvent && isTouchSource) {
     if (sysEvent.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
@@ -444,8 +460,19 @@ const unsubscribeHub = bridge.onEvenHubEvent((event) => {
 
     if (
       sysEvent.eventType === OsEventTypeList.CLICK_EVENT ||
-      sysEvent.eventType === undefined
+      (sysEvent.eventType === undefined && sysEvent.eventSource !== undefined &&
+        sysEvent.eventSource !== EventSourceType.TOUCH_EVENT_FORM_DUMMY_NULL)
     ) {
+      if (pageMode === 'home') {
+        if (selectedHomeIndex === 0) void showFavorites()
+        else void showStationList()
+        return
+      }
+      if (pageMode === 'list') {
+        const station = presentedStations.at(selectedStationIndex)
+        if (station) void showStationDetail(station)
+        return
+      }
       if (pageMode === 'detail' && presentedArrivals.length === 0) {
         void refreshEta()
         return
@@ -561,7 +588,7 @@ const unsubscribeHub = bridge.onEvenHubEvent((event) => {
   ) {
     void loadBusData()
   }
-})
+}
 
 function haversineMeters(a: Coordinates, b: Coordinates): number {
   const earthRadiusMeters = 6_371_000
@@ -948,8 +975,12 @@ function disposeApp(): void {
   unsubscribeHub()
 }
 
-async function resumeApp(): Promise<void> {
-  if (appActive || appDisposed) return
+async function resumeApp(restorePage = false): Promise<void> {
+  if (appDisposed || (appActive && !restorePage)) return
+  if (appActive) {
+    clearEtaRefresh()
+    glassesRouteImageEpoch += 1
+  }
   appActive = true
   void beginLocationTracking()
   const refreshEpoch = etaRefreshEpoch
@@ -1356,6 +1387,7 @@ async function showHome(): Promise<void> {
       isEventCapture: 1,
     })],
   }), token)
+  if (success && isPageTokenCurrent(token)) selectedHomeIndex = 0
   if (!success) console.error('[taiwan-bus] home rebuild failed')
 }
 
@@ -1501,7 +1533,10 @@ async function showStationList(refreshLocation = true): Promise<void> {
   )
 
   if (pageMode !== 'list' || stationListRenderEpoch !== renderEpoch) return
-  if (success) presentedStations.commit(nextVisibleStations)
+  if (success) {
+    presentedStations.commit(nextVisibleStations)
+    selectedStationIndex = 0
+  }
   else console.error('[taiwan-bus] list rebuild failed')
   if (refreshLocation && isPageTokenCurrent(token)) {
     void beginLocationTracking()
