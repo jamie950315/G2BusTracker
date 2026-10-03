@@ -153,6 +153,7 @@ Version `0.10.16` corrects the native foreground-layer lifecycle using the user'
 - Artifact: `taiwan-bus-g2-v0.10.16.ehpk`, **1,082,471 bytes**; SHA-256: `3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`.
 - Uploaded on 2026-10-04 (Asia/Taipei) from source commit `80a3e53`; an independent Even Hub reload confirmed **Private**.
 - On 2026-10-04 the user confirmed installed `0.10.16` passes three consecutive double-tap → No → click → home/double-tap cycles, and Yes returns to the system. This is user-reported physical verification. Public submission still requires the official Beta five-minute phone-lock and first-party app relaunch checks. Host/firmware versions and power/temperature measurements are unavailable. The proxy has not been deployed.
+- The self-test Beta invitation reached email and the portal shows **Invited**; open its **Accept and install** link on the phone. The saved store-listing privacy draft now describes Internet access, the proxy/upstream data source, and local-only use of phone coordinates. An independent reload confirmed the saved fields; the draft is not public.
 
 ### Diagnostic investigation
 

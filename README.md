@@ -153,6 +153,7 @@ node server/server.mjs
 - 套件：`taiwan-bus-g2-v0.10.16.ehpk`，**1,082,471 bytes**；SHA-256：`3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`。
 - 已於 2026-10-04（Asia/Taipei）上傳，來源 commit 為 `80a3e53`；重新載入 Even Hub 確認狀態為 **Private**。
 - 2026-10-04 使用者確認已安裝 `0.10.16`：連續三次「雙擊 → 否 → 單擊 → 返回首頁再雙擊」正常，選「是」也能回到系統。這是使用者回報的實機驗證。公開送審仍需完成官方要求的 Beta 鎖屏五分鐘與退出後啟動第一方 App 檢查。Host／firmware 版本及耗電／溫度尚未取得；proxy 尚未部署。
+- 本人 Beta 測試邀請已送達 email，Portal 顯示 **Invited**；需在手機點邀請郵件的 **Accept and install**。送審隱私草稿已更新網際網路權限、代理與上游來源，以及定位僅供本機排序的說明；重新載入後已確認保存，尚未公開。
 
 ### 診斷調查
 
