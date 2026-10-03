@@ -145,7 +145,7 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
-Version `0.10.13` was built and packaged on 2026-10-03 (Asia/Taipei). It handles foreground events from system, text and list envelopes, restores native input capture on foreground return, and accepts system taps without a touch source. Native menu selection stays aligned with accepted page rebuilds. The public build remains `0.10.11` pending a new review.
+Version `0.10.13` was built, packaged and uploaded on 2026-10-03, then submitted for public release at 21:31 (Asia/Taipei). An independent portal reload confirmed **In review** with a **Submitted** record. It handles foreground events from system, text and list envelopes, restores native input capture on foreground return, and accepts system taps without a touch source. Native menu selection stays aligned with accepted page rebuilds. Publication requires Even Realities approval; the public build remains `0.10.11` while review is pending.
 
 - All 48 tests passed, including controlled Host regressions for cancelled-dialog recovery, repeated double taps, confirmed exit, and native list selection.
 - The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.14` and Node `23.11.0`. The manifest requires Even App `2.2.9` or newer. Packaging inputs contain only the manifest, HTML, JavaScript, and bundled font.
