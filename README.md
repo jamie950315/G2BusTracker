@@ -4,7 +4,7 @@
 
 專為 Even Realities G2 與 Even Hub 打造的台灣公車即時查詢 App。目前以大台北公車資料為主，提供附近站牌、即時到站、完整路線站序、車輛位置／車牌，以及可自訂分組的常用路線。
 
-目前版本：`0.10.15`
+目前版本：`0.10.16`
 
 ## 功能特色
 
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-輸出檔案：`taiwan-bus-g2-v0.10.15.ehpk`
+輸出檔案：`taiwan-bus-g2-v0.10.16.ehpk`
 
 可先使用 production preview 檢查最終 `dist`：
 
@@ -145,6 +145,16 @@ node server/server.mjs
 
 ## 驗證狀態
 
+`0.10.16` 依使用者提供的 `0.10.15` 實機 trace 修正原生 foreground layer 的 lifecycle：開啟（`4`）時暫停工作，關閉（`5`）時恢復目前頁面與輸入；真正的 system／abnormal exit 仍會清理程式。舊處理在「否」後設為 `active=false`，因此丟棄已收到的單擊及雙擊。
+
+- 54 項測試全部通過。以實際 `3 → 退出請求接受 → 4 → 5 → list／sys 點按` 序列建立的回歸測試，在 `0.10.15` 失敗、修正後通過；也涵蓋沒有新退出請求的第二組 `4 → 5`。Host 對話框回覆仍不占用繪製佇列。
+- 已於 2026-10-04（Asia/Taipei）通過正式建置、版本檢查及打包。這個候選套件已關閉診斷，正常建置沒有手機 trace 面板與獨立觀察 listener。
+- 最終 build 通過官方 Simulator 的 12 次輸入，涵蓋首頁、附近站牌、到站資訊、路線方向、常用路線、返回及退出，console 無錯誤。Simulator 無法操作「否」，這項結果仍與實機驗證分開。
+- 套件：`taiwan-bus-g2-v0.10.16.ehpk`，**1,082,471 bytes**；SHA-256：`3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`。
+- 公開送審前仍需確認最終候選版選「否」後的單擊／雙擊。使用者的 trace 證明了錯誤狀態轉換，但不等於 `0.10.16` 已完成實機驗證。Host／firmware 版本及耗電／溫度尚未取得；proxy 尚未部署。
+
+### 診斷調查
+
 `0.10.15` 是 Private 診斷建置，尚未證明已修復取消退出。使用者確認已安裝的 `0.10.14` 選「否」後仍失去點按；需先取得 Host 事件與程式狀態的實際序列，再進行下一項修正及公開送審。
 
 - 使用 `VITE_INPUT_DIAGNOSTICS=0.10.15 npm run build` 建置診斷版，再執行 `npm run pack`。一般正式建置不包含手機診斷面板與獨立觀察 listener。
@@ -152,6 +162,7 @@ node server/server.mjs
 - 53 項測試全部通過；退出回覆未完成的案例啟用診斷後，受影響的 14 項 runtime 測試也通過。正式建置、版本檢查與打包通過。官方 Simulator 的五次輸入顯示診斷面板能記錄安全事件與實際 Bridge 結果，console 無錯誤；這不代表實機取消已正常。
 - 診斷套件：`taiwan-bus-g2-v0.10.15.ehpk`，**1,083,929 bytes**；SHA-256：`e219667b7f9be9e1eb966191e738de02c8cccea55735589df2785741da59d21b`。
 - 已於 2026-10-03（Asia/Taipei）上傳，來源 commit 為 `257dcbc`；重新載入 Even Hub 確認狀態為 **Private**。待取消退出問題解決且通過實機驗證後，再進行公開送審。
+- 2026-10-04 收到的使用者 trace 顯示原生 `4 → 5` 後，sys 雙擊及 list 單擊持續送達，但 `active=false`、`disposed=false`，直接定位到程式的 foreground layer 處理錯誤。診斷現在將內部狀態動作與真正收到的 SDK 事件代碼分開標示。
 
 ### 前一修正候選版
 

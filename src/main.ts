@@ -483,12 +483,14 @@ function handleHubEvent(event: EvenHubEvent): void {
     type === OsEventTypeList.SYSTEM_EXIT_EVENT ||
     type === OsEventTypeList.ABNORMAL_EXIT_EVENT)
   if (lifecycleEvent === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
-    // Returning from the system dialog must also restore native event capture.
-    void resumeApp(true)
+    // Device traces show these events describe the native foreground layer.
+    // Pause while its exit dialog or another native layer is open.
+    suspendApp()
     return
   }
   if (lifecycleEvent === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
-    suspendApp()
+    // Closing the native layer returns control to the existing app page.
+    void resumeApp(true)
     return
   }
   if (lifecycleEvent === OsEventTypeList.SYSTEM_EXIT_EVENT ||
@@ -1062,24 +1064,25 @@ function suspendApp(): void {
   glassesRouteImageEpoch += 1
   for (const controller of dataRequestControllers) controller.abort()
   stopLocationTracking()
-  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT })
+  recordInputDiagnostic('state', { action: 'suspend' })
 }
 
 function disposeApp(): void {
   suspendApp()
   appDisposed = true
   unsubscribeHub()
-  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.SYSTEM_EXIT_EVENT })
+  recordInputDiagnostic('state', { action: 'dispose' })
 }
 
 async function resumeApp(restorePage = false): Promise<void> {
-  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT })
+  recordInputDiagnostic('state', { action: 'resume-request' })
   if (appDisposed || (appActive && !restorePage)) return
   if (appActive) {
     clearEtaRefresh()
     glassesRouteImageEpoch += 1
   }
   appActive = true
+  recordInputDiagnostic('state', { action: 'resumed' })
   void beginLocationTracking()
   const refreshEpoch = etaRefreshEpoch
   const mode = pageMode
@@ -1099,11 +1102,11 @@ async function resumeApp(restorePage = false): Promise<void> {
 }
 
 window.addEventListener('pagehide', (event) => {
-  recordInputDiagnostic('state', { code: 1, persisted: event.persisted })
+  recordInputDiagnostic('state', { action: 'pagehide', persisted: event.persisted })
   event.persisted ? suspendApp() : disposeApp()
 })
 window.addEventListener('pageshow', (event) => {
-  recordInputDiagnostic('state', { code: 2, persisted: event.persisted })
+  recordInputDiagnostic('state', { action: 'pageshow', persisted: event.persisted })
   if (event.persisted) void resumeApp()
 })
 

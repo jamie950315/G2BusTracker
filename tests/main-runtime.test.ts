@@ -244,6 +244,37 @@ function inputRuntime() {
 
 const flushEvents = () => new Promise<void>((resolve) => setImmediate(resolve))
 
+test('the recorded native exit-layer 4 then 5 sequence restores taps and repeated exits', async () => {
+  const { ctx, calls } = inputRuntime()
+  // Device trace: shutdown accepted, sys 4, sys 5, then sys 3 and list 11 taps.
+  ctx.handleHubEvent({ sysEvent: { eventType: 3, eventSource: 1 } })
+  await flushEvents()
+  assert.equal(calls.shutdown, 1)
+  ctx.handleHubEvent({ sysEvent: { eventType: 4 } })
+  ctx.handleHubEvent({ sysEvent: { eventType: 5 } })
+  await flushEvents()
+  assert.equal(ctx.appActive, true, 'closing the native foreground layer must restore input')
+  ctx.handleHubEvent({ listEvent: { containerID: 11 } })
+  assert.equal(calls.favorites, 1)
+  ctx.handleHubEvent({ sysEvent: { eventType: 3, eventSource: 1 } })
+  await flushEvents()
+  assert.equal(calls.shutdown, 2)
+  ctx.handleHubEvent({ sysEvent: { eventType: 4 } })
+  assert.equal(ctx.appActive, false, 'the active native layer pauses app work')
+  ctx.handleHubEvent({ sysEvent: { eventType: 5 } })
+  await flushEvents()
+  // The same trace contains another layer cycle without a processed exit request.
+  ctx.handleHubEvent({ sysEvent: { eventType: 4 } })
+  ctx.handleHubEvent({ sysEvent: { eventType: 5 } })
+  await flushEvents()
+  assert.equal(ctx.appActive, true)
+  ctx.handleHubEvent({ listEvent: { containerID: 11, currentSelectItemIndex: 1 } })
+  assert.equal(calls.nearby, 1)
+  ctx.handleHubEvent({ sysEvent: { eventType: 3, eventSource: 1 } })
+  await flushEvents()
+  assert.equal(calls.shutdown, 3)
+})
+
 test('an unfinished system exit response does not block later taps or native page updates', async () => {
   const dialog = deferred()
   const rendering = deferred()
@@ -295,17 +326,17 @@ test('an unfinished system exit response does not block later taps or native pag
     entry.fields.result === true).length, 2)
 })
 
-test('foreground return restores input for text, list and system event envelopes', async () => {
+test('native layer closing restores input for text, list and system event envelopes', async () => {
   for (const envelope of ['textEvent', 'listEvent', 'sysEvent']) {
     const { ctx, calls } = inputRuntime()
     ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
     await flushEvents()
     assert.equal(calls.shutdown, 1)
-    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } })
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
     assert.equal(ctx.appActive, false, `${envelope} must suspend`)
     ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.CLICK_EVENT } })
     assert.equal(calls.favorites, 0)
-    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } })
     await flushEvents()
     assert.equal(ctx.appActive, true)
     assert.equal(calls.home, 1)
@@ -314,12 +345,12 @@ test('foreground return restores input for text, list and system event envelopes
     ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
     await flushEvents()
     assert.equal(calls.shutdown, 2)
-    // A Host can report foreground entry without a preceding background event.
-    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    // A native layer close also restores the page when the app was already active.
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } })
     await flushEvents()
     assert.equal(calls.home, 2, 'foreground return must restore native event capture even while active')
     ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.SYSTEM_EXIT_EVENT } })
-    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
+    ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } })
     await flushEvents()
     assert.equal(ctx.appDisposed, true)
     assert.equal(calls.removed, 1)

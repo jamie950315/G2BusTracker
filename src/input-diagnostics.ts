@@ -12,6 +12,7 @@ export interface InputDiagnosticFields {
   operation?: 'bridge' | 'startup' | 'rebuild' | 'text' | 'image' | 'exit'
   callID?: number
   phase?: 'queued' | 'dispatch' | 'complete' | 'error'
+  action?: 'suspend' | 'dispose' | 'resume-request' | 'resumed' | 'pagehide' | 'pageshow'
   result?: boolean | number | null
   persisted?: boolean
   code?: number
@@ -31,6 +32,7 @@ const enumFields = {
   envelope: ['list', 'text', 'sys'],
   operation: ['bridge', 'startup', 'rebuild', 'text', 'image', 'exit'],
   phase: ['queued', 'dispatch', 'complete', 'error'],
+  action: ['suspend', 'dispose', 'resume-request', 'resumed', 'pagehide', 'pageshow'],
 } as const
 const booleanFields = ['active', 'disposed', 'persisted'] as const
 const numberFields = ['eventType', 'source', 'containerID', 'selectedIndex', 'callID', 'code'] as const
