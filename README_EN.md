@@ -151,6 +151,7 @@ Version `0.10.16` corrects the native foreground-layer lifecycle using the user'
 - Production build, version check and packaging passed on 2026-10-04 (Asia/Taipei). This exact candidate has diagnostics disabled; there is no phone trace panel or independent observer in its normal build.
 - The final build passed the 12-input official Simulator flow through home, nearby stops, arrivals, route directions, favorites, back navigation and exit, with no console errors. The Simulator cannot exercise No; this remains separate from physical verification.
 - Artifact: `taiwan-bus-g2-v0.10.16.ehpk`, **1,082,471 bytes**; SHA-256: `3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`.
+- Uploaded on 2026-10-04 (Asia/Taipei) from source commit `80a3e53`; an independent Even Hub reload confirmed **Private**.
 - The final candidate still requires physical No/click/double-click verification before public submission. The user's trace establishes the faulty state transition; it is not a completed `0.10.16` device test. Host/firmware versions and power/temperature measurements are unavailable. The proxy has not been deployed.
 
 ### Diagnostic investigation

@@ -151,6 +151,7 @@ node server/server.mjs
 - 已於 2026-10-04（Asia/Taipei）通過正式建置、版本檢查及打包。這個候選套件已關閉診斷，正常建置沒有手機 trace 面板與獨立觀察 listener。
 - 最終 build 通過官方 Simulator 的 12 次輸入，涵蓋首頁、附近站牌、到站資訊、路線方向、常用路線、返回及退出，console 無錯誤。Simulator 無法操作「否」，這項結果仍與實機驗證分開。
 - 套件：`taiwan-bus-g2-v0.10.16.ehpk`，**1,082,471 bytes**；SHA-256：`3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`。
+- 已於 2026-10-04（Asia/Taipei）上傳，來源 commit 為 `80a3e53`；重新載入 Even Hub 確認狀態為 **Private**。
 - 公開送審前仍需確認最終候選版選「否」後的單擊／雙擊。使用者的 trace 證明了錯誤狀態轉換，但不等於 `0.10.16` 已完成實機驗證。Host／firmware 版本及耗電／溫度尚未取得；proxy 尚未部署。
 
 ### 診斷調查
