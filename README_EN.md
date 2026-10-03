@@ -152,7 +152,7 @@ Version `0.10.16` corrects the native foreground-layer lifecycle using the user'
 - The final build passed the 12-input official Simulator flow through home, nearby stops, arrivals, route directions, favorites, back navigation and exit, with no console errors. The Simulator cannot exercise No; this remains separate from physical verification.
 - Artifact: `taiwan-bus-g2-v0.10.16.ehpk`, **1,082,471 bytes**; SHA-256: `3d18b0b74f32cff9b14205df06193b9eea7563a2a1d731c59b0ea1b0917f0dd3`.
 - Uploaded on 2026-10-04 (Asia/Taipei) from source commit `80a3e53`; an independent Even Hub reload confirmed **Private**.
-- The final candidate still requires physical No/click/double-click verification before public submission. The user's trace establishes the faulty state transition; it is not a completed `0.10.16` device test. Host/firmware versions and power/temperature measurements are unavailable. The proxy has not been deployed.
+- On 2026-10-04 the user confirmed installed `0.10.16` passes three consecutive double-tap → No → click → home/double-tap cycles, and Yes returns to the system. This is user-reported physical verification. Public submission still requires the official Beta five-minute phone-lock and first-party app relaunch checks. Host/firmware versions and power/temperature measurements are unavailable. The proxy has not been deployed.
 
 ### Diagnostic investigation
 
