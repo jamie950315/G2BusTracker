@@ -19,6 +19,7 @@ import notoSansTcUrl from '@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-t
 import { buildStationArrivals, parseEstimateSeconds } from './arrivals.ts'
 import { PresentedList } from './presented-list.ts'
 import { PresentedText } from './presented-text.ts'
+import { InputDiagnostics, type InputDiagnosticFields, type InputDiagnosticKind } from './input-diagnostics.ts'
 import {
   COMPLEMENTARY_STATION_CLUSTER_RADIUS_METERS,
   canJoinStationCluster,
@@ -210,12 +211,49 @@ let bridgeCallQueue: Promise<void> = Promise.resolve()
 const presentedText = new PresentedText()
 let appActive = true
 let appDisposed = false
+const inputDiagnosticBuild = import.meta.env.VITE_INPUT_DIAGNOSTICS
+const inputDiagnostics = inputDiagnosticBuild ? new InputDiagnostics() : null
+let inputDiagnosticOutput: HTMLPreElement | null = null
+let inputDiagnosticPanel: HTMLDetailsElement | null = null
+let inputDiagnosticCallID = 0
 let unsubscribeLocation: (() => void) | null = null
 let locationTrackingRequested = false
 const dataRequestControllers = new Set<AbortController>()
 
-function serializeBridgeCall<T>(operation: () => Promise<T>): Promise<T> {
-  const result = bridgeCallQueue.then(operation, operation)
+function recordInputDiagnostic(kind: InputDiagnosticKind, fields: InputDiagnosticFields = {}): void {
+  if (!inputDiagnostics) return
+  inputDiagnostics.record(kind, { page: pageMode, active: appActive, disposed: appDisposed, ...fields })
+  if (inputDiagnosticPanel?.open && inputDiagnosticOutput) {
+    inputDiagnosticOutput.textContent = inputDiagnostics.reportLines().join('\n')
+    inputDiagnosticOutput.scrollTop = inputDiagnosticOutput.scrollHeight
+  }
+}
+
+function serializeBridgeCall<T>(
+  operation: () => Promise<T>,
+  name: NonNullable<InputDiagnosticFields['operation']> = 'bridge',
+): Promise<T> {
+  if (!inputDiagnostics) {
+    const result = bridgeCallQueue.then(operation, operation)
+    bridgeCallQueue = result.then(() => undefined, () => undefined)
+    return result
+  }
+  const callID = ++inputDiagnosticCallID
+  recordInputDiagnostic('bridge', { operation: name, callID, phase: 'queued' })
+  const dispatch = async () => {
+    recordInputDiagnostic('bridge', { operation: name, callID, phase: 'dispatch' })
+    try {
+      const value = await operation()
+      const diagnosticValue: unknown = value
+      recordInputDiagnostic('bridge', { operation: name, callID, phase: 'complete',
+        result: typeof diagnosticValue === 'boolean' || typeof diagnosticValue === 'number' || diagnosticValue === null ? diagnosticValue : undefined })
+      return value
+    } catch (error) {
+      recordInputDiagnostic('bridge', { operation: name, callID, phase: 'error' })
+      throw error
+    }
+  }
+  const result = bridgeCallQueue.then(dispatch, dispatch)
   bridgeCallQueue = result.then(() => undefined, () => undefined)
   return result
 }
@@ -244,7 +282,7 @@ function rebuildGlassesPage(
       presentedText.reset(container.textObject)
     }
     return success
-  })
+  }, 'rebuild')
 }
 
 function upgradeGlassesText(
@@ -261,7 +299,7 @@ function upgradeGlassesText(
     }
     if (success && isPageTokenCurrent(token) && isCurrent()) presentedText.commit(container)
     return success
-  })
+  }, 'text')
 }
 
 function updateGlassesImage(
@@ -269,7 +307,7 @@ function updateGlassesImage(
   isCurrent: () => boolean,
 ): Promise<ImageRawDataUpdateResult | null> {
   return serializeBridgeCall(() =>
-    appActive && isCurrent() ? bridge.updateImageRawData(data) : Promise.resolve(null))
+    appActive && isCurrent() ? bridge.updateImageRawData(data) : Promise.resolve(null), 'image')
 }
 
 async function shutDownGlassesPage(exitMode: number): Promise<boolean> {
@@ -278,8 +316,12 @@ async function shutDownGlassesPage(exitMode: number): Promise<boolean> {
     // The Host dialog response has no cancellation-completion contract. Serialize
     // its dispatch, but never let that response hold the native rendering queue.
     response = bridge.shutDownPageContainer(exitMode)
+    if (inputDiagnostics) void response.then(
+      (result) => recordInputDiagnostic('bridge', { operation: 'exit', phase: 'complete', result }),
+      () => recordInputDiagnostic('bridge', { operation: 'exit', phase: 'error' }),
+    )
     return Promise.resolve()
-  })
+  }, 'exit')
   return response
 }
 
@@ -347,6 +389,52 @@ const appRoot = document.createElement('main')
 appRoot.className = 'app-shell'
 document.body.append(appRoot)
 
+if (inputDiagnostics) {
+  inputDiagnosticPanel = document.createElement('details')
+  inputDiagnosticPanel.open = true
+  inputDiagnosticPanel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:100;background:#fff;color:#111;border-top:1px solid #999;padding:8px;font-size:12px'
+  const summary = document.createElement('summary')
+  summary.textContent = `Input trace · ${inputDiagnosticBuild}`
+  inputDiagnosticOutput = document.createElement('pre')
+  inputDiagnosticOutput.style.cssText = 'max-height:55vh;overflow:auto;white-space:pre-wrap;margin:8px 0;font-size:11px;line-height:1.4;user-select:text'
+  inputDiagnosticPanel.append(summary, inputDiagnosticOutput)
+  const copy = document.createElement('button')
+  copy.type = 'button'
+  copy.textContent = 'Copy trace'
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(`Input trace ${inputDiagnosticBuild}\n${inputDiagnostics.reportLines().join('\n')}`)
+      copy.textContent = 'Copied'
+    } catch {
+      copy.textContent = 'Select trace text to copy'
+    }
+  })
+  inputDiagnosticPanel.append(copy)
+  inputDiagnosticPanel.addEventListener('toggle', () => {
+    if (inputDiagnosticPanel?.open && inputDiagnosticOutput) {
+      inputDiagnosticOutput.textContent = inputDiagnostics.reportLines().join('\n')
+    }
+  })
+  document.body.append(inputDiagnosticPanel)
+  // Independent local observation survives the main handler's unsubscribe.
+  // It neither calls the Host nor records user, device or location data.
+  bridge.onEvenHubEvent((event) => {
+    let found = false
+    for (const [envelope, payload] of [['sys', event.sysEvent], ['list', event.listEvent],
+      ['text', event.textEvent]] as const) {
+      if (!payload) continue
+      found = true
+      recordInputDiagnostic('event', { envelope, eventType: payload.eventType,
+        source: 'eventSource' in payload ? payload.eventSource : undefined,
+        containerID: 'containerID' in payload ? payload.containerID : undefined,
+        selectedIndex: 'currentSelectItemIndex' in payload ? payload.currentSelectItemIndex : undefined })
+    }
+    if (!found) recordInputDiagnostic('probe', { code: -1,
+      eventType: OsEventTypeList.fromJson(event.jsonData?.eventType ?? event.jsonData?.Event_Type ?? event.jsonData?.event_type),
+      containerID: event.jsonData?.containerID ?? event.jsonData?.Container_ID ?? event.jsonData?.container_id })
+  })
+}
+
 function textContainer(
   content: string,
   id = 1,
@@ -375,7 +463,7 @@ const startupResult = await serializeBridgeCall(() => bridge.createStartUpPageCo
       textContainer('台灣公車追蹤\n\n正在載入大台北站牌…\n雙擊可離開'),
     ],
   }),
-))
+), 'startup')
 
 if (startupResult !== 0) {
   console.error('[taiwan-bus] startup page failed:', startupResult)
@@ -974,15 +1062,18 @@ function suspendApp(): void {
   glassesRouteImageEpoch += 1
   for (const controller of dataRequestControllers) controller.abort()
   stopLocationTracking()
+  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT })
 }
 
 function disposeApp(): void {
   suspendApp()
   appDisposed = true
   unsubscribeHub()
+  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.SYSTEM_EXIT_EVENT })
 }
 
 async function resumeApp(restorePage = false): Promise<void> {
+  recordInputDiagnostic('lifecycle', { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT })
   if (appDisposed || (appActive && !restorePage)) return
   if (appActive) {
     clearEtaRefresh()
@@ -1007,8 +1098,12 @@ async function resumeApp(restorePage = false): Promise<void> {
   else if (!isLoading) void loadBusData()
 }
 
-window.addEventListener('pagehide', (event) => event.persisted ? suspendApp() : disposeApp())
+window.addEventListener('pagehide', (event) => {
+  recordInputDiagnostic('state', { code: 1, persisted: event.persisted })
+  event.persisted ? suspendApp() : disposeApp()
+})
 window.addEventListener('pageshow', (event) => {
+  recordInputDiagnostic('state', { code: 2, persisted: event.persisted })
   if (event.persisted) void resumeApp()
 })
 

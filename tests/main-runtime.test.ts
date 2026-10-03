@@ -5,6 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { PresentedText } from '../src/presented-text.ts'
 import { PresentedList } from '../src/presented-list.ts'
+import { InputDiagnostics } from '../src/input-diagnostics.ts'
 import { parseEstimateSeconds } from '../src/arrivals.ts'
 import { EventSourceType, OsEventTypeList, RebuildPageContainer, TextContainerProperty,
   ListContainerProperty, ListItemContainerProperty } from '@evenrealities/even_hub_sdk'
@@ -20,7 +21,8 @@ function runtime(names: string[], globals: Record<string, unknown> = {}) {
   const code = ts.transpileModule(functions.map((node) => node.getText(source)).join('\n'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText
-  const context = vm.createContext({ console, ...globals })
+  const context = vm.createContext({ console, OsEventTypeList, inputDiagnostics: null, inputDiagnosticCallID: 0,
+    recordInputDiagnostic: () => {}, ...globals })
   vm.runInContext(code, context)
   return context
 }
@@ -246,8 +248,10 @@ test('an unfinished system exit response does not block later taps or native pag
   const dialog = deferred()
   const rendering = deferred()
   const calls: string[] = []
-  const ctx = runtime(['handleHubEvent', ...bridgeFunctions, 'shutDownGlassesPage'], {
-    appActive: true, pageMode: 'home', etaRefreshEpoch: 1,
+  const diagnostics = new InputDiagnostics()
+  const ctx = runtime(['handleHubEvent', ...bridgeFunctions, 'shutDownGlassesPage', 'recordInputDiagnostic'], {
+    appActive: true, appDisposed: false, pageMode: 'home', etaRefreshEpoch: 1,
+    inputDiagnostics: diagnostics, inputDiagnosticPanel: null, inputDiagnosticOutput: null,
     bridgeCallQueue: Promise.resolve(), presentedText: new PresentedText(),
     EventSourceType, OsEventTypeList, HOME_LIST_CONTAINER_ID: 11, LIST_CONTAINER_ID: 2,
     selectedHomeIndex: 0,
@@ -283,7 +287,12 @@ test('an unfinished system exit response does not block later taps or native pag
   ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
   await flushEvents()
   assert.equal(calls.filter((call) => call === 'exit dialog').length, 2)
+  assert.equal(diagnostics.snapshot().filter((entry) => entry.fields.operation === 'exit' &&
+    entry.fields.result === true).length, 0, 'diagnostics must not invent a Host exit response')
   dialog.resolve()
+  await flushEvents()
+  assert.equal(diagnostics.snapshot().filter((entry) => entry.fields.operation === 'exit' &&
+    entry.fields.result === true).length, 2)
 })
 
 test('foreground return restores input for text, list and system event envelopes', async () => {

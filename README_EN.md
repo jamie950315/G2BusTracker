@@ -4,7 +4,7 @@ English | [繁體中文](README.md)
 
 A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
 
-Current version: `0.10.14`
+Current version: `0.10.15`
 
 ## Features
 
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-Output: `taiwan-bus-g2-v0.10.14.ehpk`
+Output: `taiwan-bus-g2-v0.10.15.ehpk`
 
 You can inspect the final `dist` build first:
 
@@ -136,7 +136,7 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Reliability design
 
-- Serializes every G2 Bridge call through one Promise queue.
+- Serializes native page operations through one Promise queue; system exit requests serialize dispatch without holding that queue for the Host dialog response.
 - Shares identical in-flight data requests.
 - Runs network fetches and G2 page creation concurrently, but waits for target containers before updating G2.
 - Rechecks page generation, image generation, and direction after waits and retries so stale work cannot overwrite a newer page.
@@ -145,12 +145,22 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
+Version `0.10.15` is a Private diagnostic build, not a verified cancellation fix. The user confirmed that installed `0.10.14` still loses taps after No. The exact Host event/state sequence must be captured before another corrective change or public submission.
+
+- Build diagnostics with `VITE_INPUT_DIAGNOSTICS=0.10.15 npm run build`, then `npm run pack`. An ordinary production build omits the phone diagnostics panel and independent observer.
+- The local phone panel retains only the latest 64 operational entries: event codes, numeric container/selection fields, active/disposed state, page lifecycle and Bridge dispatch/results. It records no raw payloads, identifiers, coordinates or content, and sends no diagnostic data over the network. Its independent SDK listener continues observing after the main handler unsubscribes.
+- All 53 tests passed; the affected 14 runtime tests also passed after enabling diagnostics in the pending-exit regression. Production build, version check and packaging passed. The diagnostic panel displayed safe events and real Bridge results in a five-input official Simulator flow with no console errors. This does not verify physical cancellation.
+- Diagnostic artifact: `taiwan-bus-g2-v0.10.15.ehpk`, **1,083,929 bytes**; SHA-256: `e219667b7f9be9e1eb966191e738de02c8cccea55735589df2785741da59d21b`.
+
+### Previous candidate
+
 Version `0.10.14` was built and packaged on 2026-10-03 (Asia/Taipei) for physical-device verification. System exit requests now serialize dispatch only: an unfinished Host dialog response cannot block later native page operations or another exit request. This removes the queue deadlock without assuming that No emits a foreground event or returns a particular boolean.
 
 - All 49 tests passed. The new regression fails on `0.10.13` when the Host leaves its exit response pending; the corrected production functions permit subsequent tap navigation, text updates and another double-tap exit request. An existing render still completes before exit dispatch.
 - The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.14` and Node `23.11.0`. Even App `2.2.9` or newer is required. Packaging inputs contain only the manifest, HTML, JavaScript, and bundled font.
 - The final build passed a 12-input official Simulator `0.8.0` flow through home, nearby stops, arrivals, route directions, favorites, back navigation and exit, with no console errors. Simulator cannot exercise No: its exit implementation clears the framebuffer without a confirmation dialog. Controlled Host tests establish queue behavior, not the real G2 cancellation sequence.
 - Artifact: `taiwan-bus-g2-v0.10.14.ehpk`, **1,082,420 bytes**; SHA-256: `5dbb2b55bdd9cf75437abcba6317812c6fa74b7fc5db673cb8a0b24b4f827c70`.
+- Uploaded to Even Hub on 2026-10-03 (Asia/Taipei); an independent reload confirmed `0.10.14` under **Private builds**. Source commit: `9f960ba`. It has not been submitted for public review; the public build remains `0.10.11`.
 - Physical-device cancellation verification is required before another public submission. Host/firmware versions, BLE reliability, and power/temperature measurements remain unverified. The server changes have not been deployed.
 
 ### Historical validation

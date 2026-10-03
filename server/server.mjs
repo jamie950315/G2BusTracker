@@ -43,7 +43,7 @@ function refreshFeed(pathname) {
   if (pending) return pending
 
   pending = fetchUpstream(`${UPSTREAM_ORIGIN}${pathname}`, {
-    userAgent: 'taiwan-bus-g2-proxy/0.10.14',
+    userAgent: 'taiwan-bus-g2-proxy/0.10.15',
   })
     .then((entry) => {
       cache.set(pathname, entry)
@@ -116,7 +116,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         status: 'ok',
         service: 'taiwan-bus-g2-proxy',
-        version: '0.10.14',
+        version: '0.10.15',
         upstream: UPSTREAM_ORIGIN,
         checkedAt: new Date().toISOString(),
       })
