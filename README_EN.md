@@ -151,6 +151,7 @@ Version `0.10.15` is a Private diagnostic build, not a verified cancellation fix
 - The local phone panel retains only the latest 64 operational entries: event codes, numeric container/selection fields, active/disposed state, page lifecycle and Bridge dispatch/results. It records no raw payloads, identifiers, coordinates or content, and sends no diagnostic data over the network. Its independent SDK listener continues observing after the main handler unsubscribes.
 - All 53 tests passed; the affected 14 runtime tests also passed after enabling diagnostics in the pending-exit regression. Production build, version check and packaging passed. The diagnostic panel displayed safe events and real Bridge results in a five-input official Simulator flow with no console errors. This does not verify physical cancellation.
 - Diagnostic artifact: `taiwan-bus-g2-v0.10.15.ehpk`, **1,083,929 bytes**; SHA-256: `e219667b7f9be9e1eb966191e738de02c8cccea55735589df2785741da59d21b`.
+- Uploaded on 2026-10-03 (Asia/Taipei) from source commit `257dcbc`; an independent Even Hub reload confirmed **Private**. Public submission remains pending resolution and physical verification of the cancellation failure.
 
 ### Previous candidate
 

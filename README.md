@@ -151,6 +151,7 @@ node server/server.mjs
 - 本機手機面板只保留最近 64 筆操作紀錄：事件代碼、數字容器／選取欄位、active／disposed 狀態、頁面 lifecycle 與 Bridge 送出／結果。不記錄 raw payload、識別資料、座標或內容，也不透過網路傳送診斷資料。獨立 SDK listener 可在主程式取消訂閱後繼續觀察。
 - 53 項測試全部通過；退出回覆未完成的案例啟用診斷後，受影響的 14 項 runtime 測試也通過。正式建置、版本檢查與打包通過。官方 Simulator 的五次輸入顯示診斷面板能記錄安全事件與實際 Bridge 結果，console 無錯誤；這不代表實機取消已正常。
 - 診斷套件：`taiwan-bus-g2-v0.10.15.ehpk`，**1,083,929 bytes**；SHA-256：`e219667b7f9be9e1eb966191e738de02c8cccea55735589df2785741da59d21b`。
+- 已於 2026-10-03（Asia/Taipei）上傳，來源 commit 為 `257dcbc`；重新載入 Even Hub 確認狀態為 **Private**。待取消退出問題解決且通過實機驗證後，再進行公開送審。
 
 ### 前一修正候選版
 
