@@ -4,7 +4,7 @@ English | [繁體中文](README.md)
 
 A real-time Taiwan bus tracker built for Even Realities G2 and Even Hub. It currently focuses on the Greater Taipei bus network and provides nearby stops, live arrivals, full route sequences, vehicle positions and license plates, plus grouped favorite routes.
 
-Current version: `0.10.13`
+Current version: `0.10.14`
 
 ## Features
 
@@ -102,7 +102,7 @@ npm run build
 npm run pack
 ```
 
-Output: `taiwan-bus-g2-v0.10.13.ehpk`
+Output: `taiwan-bus-g2-v0.10.14.ehpk`
 
 You can inspect the final `dist` build first:
 
@@ -145,15 +145,17 @@ For production, use `server/taiwan-bus-g2-proxy.service` with systemd and expose
 
 ## Validation status
 
-Version `0.10.13` was built, packaged and uploaded on 2026-10-03, then submitted for public release at 21:31 (Asia/Taipei). An independent portal reload confirmed **In review** with a **Submitted** record. It handles foreground events from system, text and list envelopes, restores native input capture on foreground return, and accepts system taps without a touch source. Native menu selection stays aligned with accepted page rebuilds. Publication requires Even Realities approval; the public build remains `0.10.11` while review is pending.
+Version `0.10.14` was built and packaged on 2026-10-03 (Asia/Taipei) for physical-device verification. System exit requests now serialize dispatch only: an unfinished Host dialog response cannot block later native page operations or another exit request. This removes the queue deadlock without assuming that No emits a foreground event or returns a particular boolean.
 
-- All 48 tests passed, including controlled Host regressions for cancelled-dialog recovery, repeated double taps, confirmed exit, and native list selection.
-- The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.14` and Node `23.11.0`. The manifest requires Even App `2.2.9` or newer. Packaging inputs contain only the manifest, HTML, JavaScript, and bundled font.
-- Official Simulator `0.8.0` exercised 12 inputs through home, nearby stops, arrivals, route direction changes, favorites, back navigation, and system exit, with no console errors. Its exit implementation clears the framebuffer without a Yes/No dialog, so the actual cancellation sequence remains unverified on G2 hardware.
-- Artifact: `taiwan-bus-g2-v0.10.13.ehpk`, **1,082,405 bytes**; SHA-256: `0043a165cd9b701c514304d79c1937e3010fc373f981a68efd0e71a5bcf6173d`.
-- Physical-device installation, Host/firmware versions, BLE reliability, and power/temperature measurements remain unverified. The server changes have not been deployed.
+- All 49 tests passed. The new regression fails on `0.10.13` when the Host leaves its exit response pending; the corrected production functions permit subsequent tap navigation, text updates and another double-tap exit request. An existing render still completes before exit dispatch.
+- The final production build, version check, and CLI `0.1.13` packaging passed using SDK `0.0.14` and Node `23.11.0`. Even App `2.2.9` or newer is required. Packaging inputs contain only the manifest, HTML, JavaScript, and bundled font.
+- The final build passed a 12-input official Simulator `0.8.0` flow through home, nearby stops, arrivals, route directions, favorites, back navigation and exit, with no console errors. Simulator cannot exercise No: its exit implementation clears the framebuffer without a confirmation dialog. Controlled Host tests establish queue behavior, not the real G2 cancellation sequence.
+- Artifact: `taiwan-bus-g2-v0.10.14.ehpk`, **1,082,420 bytes**; SHA-256: `5dbb2b55bdd9cf75437abcba6317812c6fa74b7fc5db673cb8a0b24b4f827c70`.
+- Physical-device cancellation verification is required before another public submission. Host/firmware versions, BLE reliability, and power/temperature measurements remain unverified. The server changes have not been deployed.
 
 ### Historical validation
+
+Version `0.10.13` was submitted on 2026-10-03 at 21:31 (Asia/Taipei), but the user confirmed that the installed build still loses taps after No. Its foreground-event tests did not reproduce an unfinished Host exit response. That submission is not evidence of a working fix.
 
 Version `0.10.12` passed 45 tests and Simulator checks before submission on 2026-09-30. Even Hub rejected it on 2026-10-03 at 20:31 (Asia/Taipei) because taps stopped working after cancelling the system exit dialog. Its SDK was `0.0.12`; version `0.10.13` updates it to the current submission floor of `0.0.14`.
 

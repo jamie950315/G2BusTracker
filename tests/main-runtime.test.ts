@@ -242,7 +242,51 @@ function inputRuntime() {
 
 const flushEvents = () => new Promise<void>((resolve) => setImmediate(resolve))
 
-test('cancelled exit restores input for text, list and system foreground events', async () => {
+test('an unfinished system exit response does not block later taps or native page updates', async () => {
+  const dialog = deferred()
+  const rendering = deferred()
+  const calls: string[] = []
+  const ctx = runtime(['handleHubEvent', ...bridgeFunctions, 'shutDownGlassesPage'], {
+    appActive: true, pageMode: 'home', etaRefreshEpoch: 1,
+    bridgeCallQueue: Promise.resolve(), presentedText: new PresentedText(),
+    EventSourceType, OsEventTypeList, HOME_LIST_CONTAINER_ID: 11, LIST_CONTAINER_ID: 2,
+    selectedHomeIndex: 0,
+    bridge: {
+      shutDownPageContainer: (mode: number) => {
+        assert.equal(mode, 1)
+        calls.push('exit dialog')
+        return dialog.promise.then(() => true)
+      },
+      rebuildPageContainer: async () => { calls.push('rebuild'); return true },
+      textContainerUpgrade: async () => { calls.push('text'); return true },
+    },
+    showFavorites: () => ctx.rebuildGlassesPage({ textObject: [] }),
+  })
+  // Keep an existing render in progress: opening the dialog must respect dispatch order.
+  void ctx.serializeBridgeCall(async () => {
+    calls.push('render started')
+    await rendering.promise
+    calls.push('render finished')
+  })
+  ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
+  await flushEvents()
+  assert.deepEqual(calls, ['render started'])
+  rendering.resolve()
+  await flushEvents()
+  assert.deepEqual(calls, ['render started', 'render finished', 'exit dialog'])
+  // Model a dismissed native dialog whose Host call has not returned, without inventing lifecycle events.
+  ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.CLICK_EVENT } })
+  await flushEvents()
+  assert.equal(calls.at(-1), 'rebuild', 'a tap must reach the Host while the old exit response is pending')
+  await ctx.upgradeGlassesText({ containerID: 1, containerName: 'home', content: 'updated' })
+  assert.equal(calls.at(-1), 'text')
+  ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
+  await flushEvents()
+  assert.equal(calls.filter((call) => call === 'exit dialog').length, 2)
+  dialog.resolve()
+})
+
+test('foreground return restores input for text, list and system event envelopes', async () => {
   for (const envelope of ['textEvent', 'listEvent', 'sysEvent']) {
     const { ctx, calls } = inputRuntime()
     ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
@@ -261,7 +305,7 @@ test('cancelled exit restores input for text, list and system foreground events'
     ctx.handleHubEvent({ listEvent: { containerID: 11, eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } })
     await flushEvents()
     assert.equal(calls.shutdown, 2)
-    // A cancelled dialog can return foreground without a preceding background event.
+    // A Host can report foreground entry without a preceding background event.
     ctx.handleHubEvent({ [envelope]: { eventType: OsEventTypeList.FOREGROUND_ENTER_EVENT } })
     await flushEvents()
     assert.equal(calls.home, 2, 'foreground return must restore native event capture even while active')

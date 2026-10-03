@@ -272,8 +272,15 @@ function updateGlassesImage(
     appActive && isCurrent() ? bridge.updateImageRawData(data) : Promise.resolve(null))
 }
 
-function shutDownGlassesPage(exitMode: number): Promise<boolean> {
-  return serializeBridgeCall(() => bridge.shutDownPageContainer(exitMode))
+async function shutDownGlassesPage(exitMode: number): Promise<boolean> {
+  let response!: Promise<boolean>
+  await serializeBridgeCall(() => {
+    // The Host dialog response has no cancellation-completion contract. Serialize
+    // its dispatch, but never let that response hold the native rendering queue.
+    response = bridge.shutDownPageContainer(exitMode)
+    return Promise.resolve()
+  })
+  return response
 }
 
 let pageMode: PageMode = 'loading'

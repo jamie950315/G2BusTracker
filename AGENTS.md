@@ -10,7 +10,7 @@
 
 ## Product and current state
 
-- App version `0.10.13`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
+- App version `0.10.14`, package ID `dev.oruka.taiwanbus`; TypeScript/Vite phone WebView app for Even Realities G2, not code running directly on the glasses.
 - Phone and G2 offer home, favorites, nearby stops, stop arrivals, and route detail. Phone manages favorite groups and routes; G2 is read-only.
 - Uses the Greater Taipei public bus feeds. Default location is Taipei Main Station until phone GPS is available; location stays local to distance calculations. Continuous medium-accuracy GPS runs only on the nearby list and stops when leaving it. There is no startup high-accuracy location request.
 - Refreshes ETAs/vehicles every five seconds. Keep source update time distinct from receipt time; do not fabricate arrivals or plates.
@@ -32,7 +32,7 @@
 ## Rendering and input contracts
 
 - Wait for Bridge, create startup once, then rebuild for structural changes and upgrade matching ID/name containers for content changes.
-- All native calls pass through `serializeBridgeCall`; image work additionally has its own queue. Render phone state without awaiting glasses transfers.
+- Native page operations pass through `serializeBridgeCall`; image work additionally has its own queue. System exit requests serialize dispatch only: their Host response must never hold the rendering queue because cancellation completion is not specified. Render phone state without awaiting glasses transfers.
 - Route content updates wait for initial page creation and run serially. Superseded direction work is discarded at actual Bridge dispatch; an accepted fallback rebuild synchronizes the layout before the next content update.
 - Phone arrivals and route stops retain DOM rows across refreshes; update only changed text, classes and plates. Empty favorite groups do not download ETA. Favorite gestures resolve against the last successfully presented entries and selection.
 - Host lifecycle events are accepted from system, text and list envelopes. Foreground exit pauses refreshes, aborts downloads and stops GPS; foreground entry restores the native page and input capture even if the app already considers itself active (such as after cancelling the system exit dialog). System/abnormal exit and non-persisted `pagehide` also remove the Hub subscription. Persisted `pagehide`/`pageshow` pause/resume for BFCache. Do not pause solely on phone document visibility, since G2 can remain in use.
@@ -67,4 +67,4 @@ rtk npm run pack
 - Client targets `https://taiwan-bus.0ruka.dev/blobbus/{GetStop,GetRoute,GetEstimateTime,GetBusData}.gz`.
 - Repository docs describe the proxy on Raspberry Pi 5. Checked-in service uses `/opt/taiwan-bus-g2-proxy`, loopback port 8893 and user/group `jamie`. This is documented configuration, not a fresh remote inspection.
 - Static feed cache TTL is five minutes; dynamic TTL is two seconds with bounded stale allowance. Preserve the no-credentials-in-client design.
-- Version `0.10.12` was rejected on 2026-10-03 at 20:31 (Asia/Taipei) for input loss after cancelling the system exit dialog. Version `0.10.13` passes 48 tests, the production build, packaging, and a 12-input official Simulator flow. Cancellation recovery is covered by controlled Host tests; Simulator `0.8.0` clears the framebuffer on exit and cannot exercise No. Physical GPS/lifecycle/BLE behavior and power/temperature reduction remain unverified. Version `0.10.13` was uploaded and submitted for public release at 21:31 on 2026-10-03 (Asia/Taipei); an independent portal reload confirmed **In review** and **Submitted**. Public version is still `0.10.11`. The proxy has not been deployed.
+- Versions `0.10.12` and installed `0.10.13` lose taps after cancelling the system exit dialog. The `0.10.13` public submission at 2026-10-03 21:31 (Asia/Taipei) did not fix the device failure. Version `0.10.14` removes the rendering queue's dependency on the Host exit response; a regression with an unfinished shutdown call fails before the fix and passes afterward. All 49 tests, production build and packaging pass. No cancellation result or foreground event sequence is specified by the SDK. Simulator `0.8.0` clears the framebuffer on exit and cannot exercise No; verify the installed candidate on G2 before another public submission. Public version was last verified as `0.10.11`. Physical GPS/lifecycle/BLE behavior and power/temperature reduction remain unverified. The proxy has not been deployed.
